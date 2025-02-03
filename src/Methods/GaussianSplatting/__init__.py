@@ -1,0 +1,7 @@
+from Methods.GaussianSplatting.Model import GaussianSplattingModel
+from Methods.GaussianSplatting.Renderer import GaussianSplattingRenderer
+from Methods.GaussianSplatting.Trainer import GaussianSplattingTrainer
+
+MODEL = GaussianSplattingModel
+RENDERER = GaussianSplattingRenderer
+TRAINING_INSTANCE = GaussianSplattingTrainer

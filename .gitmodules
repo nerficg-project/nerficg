@@ -1,0 +1,6 @@
+[submodule "src/ICGui"]
+	path = src/ICGui
+	url = ../icgui
+[submodule "src/CudaUtils"]
+	path = src/CudaUtils
+	url = ../cuda-utils
