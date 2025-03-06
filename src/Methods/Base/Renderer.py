@@ -220,7 +220,7 @@ class BaseRenderer(Framework.Configurable, ABC):
                 # append colored ground truth data
                 if save_gt:
                     outputs.update(self.pseudoColorGT(dataset.camera, dataset, index))
-                elif calculate_metrics and dataset.camera.properties.rgb is not None:
+                elif (calculate_metrics or visualize_errors) and dataset.camera.properties.rgb is not None:
                     # append only ground truth rgb images for metric calculation
                     outputs['rgb_gt'] = dataset.camera.properties.rgb
                 # append closest gt image

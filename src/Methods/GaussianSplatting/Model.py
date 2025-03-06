@@ -49,7 +49,7 @@ class Gaussians(torch.nn.Module):
 
     @property
     def get_rotations(self) -> torch.Tensor:
-        """Returns the Gaussians' rotation matrices."""
+        """Returns the Gaussians' rotations as quaternions."""
         return self.rotation_activation(self._rotations)
 
     @property

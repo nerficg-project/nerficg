@@ -75,7 +75,7 @@ TRAINING:
 DATASET:
     PATH: dataset/nerf_synthetic/lego
     IMAGE_SCALE_FACTOR: null
-    NORMALIZE_CUBE: 2.0
+    NORMALIZE_CUBE: 2.66666666667  # NeRF synthetic cameras are inside [-4, 4]^3, geometry is only in the [-1.5, 1.5]^3
     NORMALIZE_RECENTER: false
     PRECOMPUTE_RAYS: true
     TO_DEVICE: true

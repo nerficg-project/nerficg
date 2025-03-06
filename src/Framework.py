@@ -283,11 +283,10 @@ def setupWandb(project: str, entity: str, name: str) -> bool:
     try:
         global wandb
         import wandb
-        wandb.require("core")
         Logger.logInfo('setting up wandb')
         # os.environ["WANDB_CONSOLE"] = "off"
         os.environ["WANDB_SILENT"] = "true"
-        log_path = Path(__file__).resolve().parents[1] / 'output' / 'wandb'
+        log_path = Path(__file__).resolve().parents[1] / 'output'
         log_path.mkdir(parents=True, exist_ok=True)
         wandb.init(project=project, entity=entity, name=name, config=config.toDict(),
                    dir=str(log_path))

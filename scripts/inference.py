@@ -92,7 +92,7 @@ def main(*, base_dir: Path, checkpoint_name: str, subsets: list[str] | None, cal
         with open(str(benchmark_output_path), 'w') as f:
             f.write(f'Number of test set renders: {NUM_ITERATIONS}\n')
             f.write(f'Number of test set images: {num_test_images}\n')
-            f.write(f'Test set image size: {out["rgb"].shape[2]}x{out["rgb"].shape[1]}\n')
+            f.write(f'Test set image size: {sample.width}x{sample.height}\n')
             f.write(f'Total rendering time: {total_time_ms:.2f} ms\n')
             f.write(f'Average rendering time per image: {avg_ms_per_image:.2f} ms\n')
             f.write(f'Average FPS: {avg_fps:.2f}\n')
