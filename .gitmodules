@@ -1,6 +1,6 @@
 [submodule "src/ICGui"]
 	path = src/ICGui
-	url = ../icgui
+	url = ../../nerficg-project/icgui
 [submodule "src/CudaUtils"]
 	path = src/CudaUtils
-	url = ../cuda-utils
+	url = ../../nerficg-project/cuda-utils
