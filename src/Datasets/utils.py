@@ -42,7 +42,7 @@ def loadImage(filename: str, scale_factor: float | None) -> tuple[torch.Tensor, 
     except Exception:
         raise Framework.DatasetError(f'Failed to load image file: "{filename}"')
     # convert image to the format used by the framework
-    image = image.float() / 255
+    image = image.float() / (65535 if image.dtype == torch.uint16 else 255)
     # apply scaling factor to image
     if scale_factor is not None:
         image = applyImageScaleFactor(image, scale_factor)
