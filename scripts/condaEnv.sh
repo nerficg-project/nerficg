@@ -43,7 +43,7 @@ conda create -y --name $ENV_NAME python=$PYTHONVERSION
 conda install -y -n $ENV_NAME packaging
 conda run -n $ENV_NAME pip install torch==2.5.1 torchvision --index-url https://download.pytorch.org/whl/${CUDAVERSION}
 conda run -n $ENV_NAME pip install numpy tqdm natsort GitPython av ffmpeg-python pyyaml munch tabulate wandb opencv-python kornia torchmetrics lpips einops setuptools plyfile matplotlib timm plotly pillow jax
-conda install -y -n $ENV_NAME -c conda-forge colmap
+# conda install -y -n $ENV_NAME -c conda-forge colmap
 # install gui dependencies
 if [ "$HEADLESS" = false ]; then
     conda run -n $ENV_NAME pip install imgui[sdl2] cuda-python platformdirs
