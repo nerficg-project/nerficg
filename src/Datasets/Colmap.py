@@ -416,12 +416,12 @@ class CustomDataset(BaseDataset):
                         distortion_parameters = None
                     case 'SIMPLE_RADIAL':
                         distortion_parameters = RadialTangentialDistortion(
-                            k1=cam_data.params[4]
+                            k1=cam_data.params[3]
                         )
                     case 'RADIAL':
                         distortion_parameters = RadialTangentialDistortion(
-                            k1=cam_data.params[4],
-                            k2=cam_data.params[5],
+                            k1=cam_data.params[3],
+                            k2=cam_data.params[4],
                         )
                     case 'OPENCV':
                         distortion_parameters = RadialTangentialDistortion(
@@ -430,7 +430,7 @@ class CustomDataset(BaseDataset):
                             p1=cam_data.params[6],
                             p2=cam_data.params[7],
                         )
-                    case '_':
+                    case _:
                         raise Framework.DatasetError(f'Unknown camera model "{cam_data.model}"')
                 disp = segmentation = None
                 if load_disp:
