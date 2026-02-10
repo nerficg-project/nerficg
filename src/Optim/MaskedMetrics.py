@@ -32,7 +32,7 @@ try:
     import jax.numpy as jnp
     import jax.scipy as jsp
 except ImportError:
-    Logger.logError('JAX is not installed. Install JAX via: \n \
+    Logger.log_error('JAX is not installed. Install JAX via: \n \
                 pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html')
 
 

@@ -1,6 +1,4 @@
-# -- coding: utf-8 --
-
-"""Samplers/ImageSamplers.py: Samplers selceting a subset of rays from a given ray batch."""
+"""Samplers/ImageSamplers.py: Samplers selecting a subset of rays from a given ray batch."""
 
 from abc import ABC, abstractmethod
 
@@ -14,7 +12,7 @@ class ImageSampler(ABC):
 
     def __init__(self, num_elements: int) -> None:
         super().__init__()
-        self.num_elements: int = num_elements
+        self.num_elements = num_elements
 
     @abstractmethod
     def get(self, ray_batch_size: int) -> torch.Tensor:

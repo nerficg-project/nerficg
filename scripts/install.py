@@ -1,7 +1,6 @@
 #! /usr/bin/env python3
-# -- coding: utf-8 --
 
-"""install.py: installs specific extensions or all extensions required by a given method."""
+"""install.py: Installs specific extensions or all extensions required by a given method."""
 
 import os
 import subprocess
@@ -13,23 +12,23 @@ import warnings
 from types import ModuleType
 
 import utils
-
-with utils.discoverSourcePath():
+with utils.DiscoverSourcePath():
     import Framework
     from Implementations import Methods as MI
     from Logging import Logger
+    from Methods.Base.GuiTrainer import GuiTrainer  # ensures imgui_bundle is only imported once while also supporting headless mode
 
 
-def installExtension(install_name: str, install_command: list[str]) -> bool:
+def install_extension(install_name: str, install_command: list[str]) -> bool:
     """Installs a single extension."""
-    Logger.logInfo(f'Installing extension {install_name}...')
+    Logger.log_info(f'Installing extension {install_name}...')
     result = subprocess.run(install_command, check=False)
     if result.returncode != 0:
-        Logger.logError(f'Failed to install extension "{install_name}" with command: "{install_command if isinstance(install_command, str) else " ".join(install_command)}"')
+        Logger.log_error(f'Failed to install extension "{install_name}" with command: "{install_command if isinstance(install_command, str) else " ".join(install_command)}"')
     return result.returncode == 0
 
 
-def importExtension(extension_path: str) -> ModuleType:
+def import_extension(extension_path: str) -> ModuleType:
     """Imports an extension module."""
     extension_spec = Path(extension_path).resolve()
     if extension_spec.is_dir():
@@ -46,50 +45,53 @@ def main(extension_path: str, method_name: str) -> None:
     essential_modules = set(sys.modules.keys())
     if extension_path is not None:
         try:
-            extension_module = importExtension(extension_path)
+            extension_module = import_extension(extension_path)
             install_command = extension_module.__install_command__
             install_name = extension_module.__extension_name__
         except Framework.ExtensionError as e:
             install_name = e.__extension_name__
             install_command = e.__install_command__
         except FileNotFoundError:
-            Logger.logError(f'Invalid extension path "{extension_path}": Module not found.')
+            Logger.log_error(f'Invalid extension path "{extension_path}": Module not found.')
             return
         except AttributeError as e:
-            Logger.logError(f'Invalid extension module "{extension_path}": {e}')
+            Logger.log_error(f'Invalid extension module "{extension_path}": {e}')
             return
-        if not installExtension(install_name, install_command):
+        if not install_extension(install_name, install_command):
             return
     if method_name is not None:
         if method_name not in MI.options:
-            Logger.logError(f'Invalid method name "{method_name}".\nAvailable methods are: {MI.options}')
+            Logger.log_error(f'Invalid method name "{method_name}".\nAvailable methods are: {MI.options}')
             return
-        Logger.logInfo(f'Installing extensions for method "{method_name}"...')
+        Logger.log_info(f'Installing extensions for method "{method_name}"...')
         last_installed = None
-        with utils.discoverSourcePath():
+        with utils.DiscoverSourcePath():
             while True:
                 try:
-                    all_modules = set(sys.modules.keys())
-                    for module in all_modules.symmetric_difference(essential_modules):
-                        del sys.modules[module]
-                    MI._import(method_name)
+                    MI.import_(method_name)
                     break
                 except Framework.ExtensionError as e:
                     if last_installed == e.__extension_name__:
-                        Logger.logError(f'Failed to install extension "{e.__extension_name__}" with command: "{e.__install_command__ if isinstance(e.__install_command__, str) else " ".join(e.__install_command__)}"')
+                        Logger.log_error(f'Failed to install extension "{e.__extension_name__}" with command: "{e.__install_command__ if isinstance(e.__install_command__, str) else " ".join(e.__install_command__)}"')
                         return
                     last_installed = e.__extension_name__
-                    if not installExtension(e.__extension_name__, e.__install_command__):
+                    if not install_extension(e.__extension_name__, e.__install_command__):
                         return
                 except Exception as e:
-                    Logger.logError(f'Unexpected error during method import: {e}')
+                    Logger.log_error(f'Unexpected error during method import: {e}')
                     return
-    Logger.logInfo('done')
+                all_modules = set(sys.modules.keys())
+                for module in all_modules - essential_modules:
+                    del sys.modules[module]
+    Logger.log_info('done')
 
 
 if __name__ == '__main__':
     # parse arguments
-    parser: ArgumentParser = ArgumentParser(prog='Install')
+    parser = ArgumentParser(
+        prog='install.py',
+        description='Installs specific extensions or all extensions required by a given method.'
+    )
     parser.add_argument(
         '-m', '--method', action='store', dest='method_name', default=None,
         metavar='method_name', required=False,
@@ -102,7 +104,7 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
     # run
-    Logger.setMode(Logger.MODE_VERBOSE)
+    Logger.set_mode(Logger.MODE_VERBOSE)
     warnings.filterwarnings('ignore')
     os.environ['MKL_THREADING_LAYER'] = 'GNU'
     main(args.extension_path, args.method_name)

@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Thirdparty/Apex.py: NVIDIA Apex (https://github.com/NVIDIA/apex).
 """

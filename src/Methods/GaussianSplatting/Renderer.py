@@ -1,14 +1,10 @@
-# -- coding: utf-8 --
-
 """GaussianSplatting/Renderer.py: """
 
 import torch
 
 import Framework
-from Cameras.Base import BaseCamera
 from Cameras.Perspective import PerspectiveCamera
-from Cameras.utils import IdentityDistortion
-from Datasets.Base import BaseDataset
+from Datasets.utils import View
 from Logging import Logger
 
 from Methods.Base.Renderer import BaseModel
@@ -36,38 +32,43 @@ class GaussianSplattingRenderer(BaseRenderer):
         if not Framework.config.GLOBAL.GPU_INDICES:
             raise Framework.RendererError('GaussianSplatting renderer not implemented in CPU mode')
         if len(Framework.config.GLOBAL.GPU_INDICES) > 1:
-            Logger.logWarning(f'GaussianSplatting renderer not implemented in multi-GPU mode: using GPU {Framework.config.GLOBAL.GPU_INDICES[0]}')
-        self.conversion = torch.diag(torch.tensor([1.0, 1.0, -1.0, 1.0])).to(Framework.config.GLOBAL.DEFAULT_DEVICE)
+            Logger.log_warning(f'GaussianSplatting renderer not implemented in multi-GPU mode: using GPU {Framework.config.GLOBAL.GPU_INDICES[0]}')
         self.cached_sh_features = None
 
-    def renderImage(self, camera: 'PerspectiveCamera', to_chw: bool = False, benchmark: bool = False) -> dict[str, torch.Tensor]:
-        """Renders an image for a given camera."""
-        if not isinstance(camera.properties.distortion_parameters, IdentityDistortion):
-            Logger.logWarning('Found distortion parameters that will be ignored by the rasterizer.')
+    def render_image(self, view: View, to_chw: bool = False, benchmark: bool = False) -> dict[str, torch.Tensor]:
+        """Renders an image for a given view."""
+        if not isinstance(view.camera, PerspectiveCamera):
+            raise Framework.RendererError('GaussianSplatting renderer only supports perspective cameras')
+        if view.camera.distortion is not None:
+            Logger.log_warning('found distortion parameters that will be ignored by the rasterizer')
         if benchmark:
-            return self.renderImageBenchmark(camera)
+            return self.render_image_benchmark(view)
         elif self.model.training:
-            return self.renderImageTraining(camera)
+            raise Framework.RendererError('please directly call render_image_training() instead of render_image() during training')
         else:
-            return self.renderImageInference(camera, to_chw)
+            return self.render_image_inference(view, to_chw)
 
-    def renderImageTraining(self, camera: 'PerspectiveCamera') -> dict[str, torch.Tensor]:
-        """Renders an image for a given camera for optimization."""
+    def render_image_training(self, view: View) -> dict[str, torch.Tensor]:
+        """Renders an image for a given view for optimization."""
+        if not isinstance(view.camera, PerspectiveCamera):
+            raise Framework.RendererError('GaussianSplatting renderer only supports perspective cameras')
+        if view.camera.distortion is not None:
+            Logger.log_warning('found distortion parameters that will be ignored by the rasterizer')
         positions = self.model.gaussians.get_positions
         viewspace_points = torch.zeros_like(positions, requires_grad=True) + 0
         viewspace_points.retain_grad()
-        w2c = torch.linalg.inv(camera.properties.c2w @ self.conversion).T
+        w2c = view.w2c.T
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
-            image_height=camera.properties.height,
-            image_width=camera.properties.width,
-            tanfovx=camera.properties.width / camera.properties.focal_x * 0.5,
-            tanfovy=camera.properties.height / camera.properties.focal_y * 0.5,
-            bg=camera.background_color,
+            image_height=view.camera.height,
+            image_width=view.camera.width,
+            tanfovx=view.camera.width / view.camera.focal_x * 0.5,
+            tanfovy=view.camera.height / view.camera.focal_y * 0.5,
+            bg=view.camera.background_color,
             scale_modifier=1.0,
             viewmatrix=w2c,
-            projmatrix=w2c @ camera.getProjectionMatrix().T,
+            projmatrix=w2c @ view.camera.get_projection_matrix().T,
             sh_degree=self.model.gaussians.active_sh_degree,
-            campos=camera.properties.T,
+            campos=view.position,
             prefiltered=False,
             debug=False
         ))
@@ -85,20 +86,20 @@ class GaussianSplattingRenderer(BaseRenderer):
         }
 
     @torch.no_grad()
-    def renderImageInference(self, camera: 'PerspectiveCamera', to_chw: bool = False) -> dict[str, torch.Tensor]:
-        """Renders an image for a given camera during inference."""
+    def render_image_inference(self, view: View, to_chw: bool = False) -> dict[str, torch.Tensor]:
+        """Renders an image for a given view during inference."""
         positions = self.model.gaussians.get_positions
-        w2c = torch.linalg.inv(camera.properties.c2w @ self.conversion).T
-        camera_position = camera.properties.T
+        w2c = view.w2c.T
+        camera_position = view.position
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
-            image_height=camera.properties.height,
-            image_width=camera.properties.width,
-            tanfovx=camera.properties.width / camera.properties.focal_x * 0.5,
-            tanfovy=camera.properties.height / camera.properties.focal_y * 0.5,
-            bg=camera.background_color,
+            image_height=view.camera.height,
+            image_width=view.camera.width,
+            tanfovx=view.camera.width / view.camera.focal_x * 0.5,
+            tanfovy=view.camera.height / view.camera.focal_y * 0.5,
+            bg=view.camera.background_color,
             scale_modifier=self.SCALE_MODIFIER,
             viewmatrix=w2c,
-            projmatrix=w2c @ camera.getProjectionMatrix().T,
+            projmatrix=w2c @ view.camera.get_projection_matrix().T,
             sh_degree=self.model.gaussians.active_sh_degree,
             campos=camera_position,
             prefiltered=False,
@@ -131,7 +132,7 @@ class GaussianSplattingRenderer(BaseRenderer):
             compute_covariance = False
             covariances = self.model.gaussians.get_baked_covariances
             if covariances.shape[0] != positions.shape[0]:
-                Logger.logWarning('Baked covariance requested but not available')
+                Logger.log_warning('Baked covariance requested but not available')
                 covariances = None
                 compute_covariance = True
             scales = None
@@ -154,22 +155,22 @@ class GaussianSplattingRenderer(BaseRenderer):
         return {'rgb': image if to_chw else image.permute(1, 2, 0)}
 
     @torch.inference_mode()
-    def renderImageBenchmark(self, camera: 'PerspectiveCamera') -> dict[str, torch.Tensor]:
-        """Renders an image "as fast as possible". Results should not be used for research papers."""
+    def render_image_benchmark(self, view: View) -> dict[str, torch.Tensor]:
+        """Renders an image "as fast as possible"."""
         if self.cached_sh_features is None:  # this is a hack to avoid blowing up model size on disk
             self.cached_sh_features = self.model.gaussians.get_features
-        w2c = torch.linalg.inv(camera.properties.c2w @ self.conversion).T
+        w2c = view.w2c.T
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
-            image_height=camera.properties.height,
-            image_width=camera.properties.width,
-            tanfovx=camera.properties.width / camera.properties.focal_x * 0.5,
-            tanfovy=camera.properties.height / camera.properties.focal_y * 0.5,
-            bg=camera.background_color,
+            image_height=view.camera.height,
+            image_width=view.camera.width,
+            tanfovx=view.camera.width / view.camera.focal_x * 0.5,
+            tanfovy=view.camera.height / view.camera.focal_y * 0.5,
+            bg=view.camera.background_color,
             scale_modifier=1.0,
             viewmatrix=w2c,
-            projmatrix=w2c @ camera.getProjectionMatrix().T,
+            projmatrix=w2c @ view.camera.get_projection_matrix().T,
             sh_degree=self.model.gaussians.active_sh_degree,
-            campos=camera.properties.T,
+            campos=view.position,
             prefiltered=False,
             debug=False
         ))
@@ -182,16 +183,6 @@ class GaussianSplattingRenderer(BaseRenderer):
             cov3D_precomp=self.model.gaussians.get_baked_covariances)[0]
         return {'rgb': image.clamp_(0.0, 1.0)}
 
-
-    def pseudoColorOutputs(self, outputs: dict[str, torch.Tensor], camera: 'BaseCamera', dataset: 'BaseDataset', index: int) -> dict[str, torch.Tensor]:
-        """Pseudo-colors the model outputs, returning tensors of shape 3xHxW."""
+    def postprocess_outputs(self, outputs: dict[str, torch.Tensor], *_) -> dict[str, torch.Tensor]:
+        """Postprocesses the model outputs, returning tensors of shape 3xHxW."""
         return {'rgb': outputs['rgb'].clamp_(0.0, 1.0)}
-
-    def pseudoColorGT(self, camera: 'BaseCamera', dataset: 'BaseDataset', index: int) -> dict[str, torch.Tensor]:
-        """Pseudo-colors the gt labels relevant for this method, returning tensors of shape 3xHxW."""
-        gt_data = {}
-        if camera.properties.rgb is not None:
-            gt_data['rgb_gt'] = camera.properties.rgb
-        if camera.properties.alpha is not None:
-            gt_data['alpha_gt'] = camera.properties.alpha.expand(3, -1, -1)
-        return gt_data

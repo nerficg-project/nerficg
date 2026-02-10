@@ -1,229 +1,244 @@
-# -- coding: utf-8 --
-
 """Datasets/Base.py: Basic dataset class features."""
 
+from typing import Iterator, Iterable
 from abc import ABC, abstractmethod
-import dataclasses
 from pathlib import Path
-from typing import Any, Callable
 
+import numpy as np
 import torch
 
 import Framework
 from Cameras.Base import BaseCamera
-from Cameras.utils import CameraProperties
-from Datasets.utils import BasicPointCloud, tensor_to_string
+from Cameras.utils import SharedCameraSettings, look_at
+from Datasets.utils import BasicPointCloud, AxisAlignedBox, View, RayCollection, RayBatch
 from Methods.Base.utils import CallbackTimer
 from Logging import Logger
 
+DEFAULT_CAMERA_INDEX = 0
+DEFAULT_VIEW_INDEX = 0
 
 @Framework.Configurable.configure(
     PATH='path/to/dataset/directory',
     IMAGE_SCALE_FACTOR=None,
     NORMALIZE_CUBE=None,
     NORMALIZE_RECENTER=False,
-    PRECOMPUTE_RAYS=False,
-    TO_DEVICE=False,
-    BACKGROUND_COLOR=[1.0, 1.0, 1.0],
+    BACKGROUND_COLOR=[0.0, 0.0, 0.0],
+    NEAR_PLANE=0.01,
+    FAR_PLANE=1000.0,
 )
-class BaseDataset(Framework.Configurable, ABC, torch.utils.data.Dataset):
+class BaseDataset(Framework.Configurable, ABC, Iterable[View]):
     """Implements common functionalities of all datasets."""
 
-    def __init__(self,
-                 path: str,
-                 camera: 'BaseCamera',
-                 camera_system: Callable | None = None,
-                 world_system: Callable | None = None
-                 ) -> None:
+    def __init__(self, path: str) -> None:
         Framework.Configurable.__init__(self, 'DATASET')
         ABC.__init__(self)
-        torch.utils.data.Dataset.__init__(self)
+        # data model
+        self.subsets = ['train', 'test', 'val']
+        self.mode = 'train'
+        self._bounding_box: AxisAlignedBox | None = None
+        self._point_cloud: BasicPointCloud | None = None  # TODO: only load on demand
+        self._camera_settings = SharedCameraSettings(
+            background_color=torch.tensor(self.BACKGROUND_COLOR, dtype=torch.float32, device=Framework.config.GLOBAL.DEFAULT_DEVICE),
+            near_plane=float(self.NEAR_PLANE),
+            far_plane=float(self.FAR_PLANE)
+        )
         # check dataset path
-        self.dataset_path: Path = Path(path)
+        self.dataset_path = Path(path)
         Logger.log(f'loading dataset: {self.dataset_path}')
-        self.load_timer: CallbackTimer = CallbackTimer()
+        self.load_timer = CallbackTimer()
         with self.load_timer:
-            # define subsets and load data
-            self.subsets: list[str] = ['train', 'test', 'val']
-            self.camera: 'BaseCamera' = camera
-            self.camera.setBackgroundColor(*self.BACKGROUND_COLOR)
-            self.camera_coordinate_system: Callable | None = camera_system
-            self.world_coordinate_system: Callable | None = world_system
-            self._bounding_box: torch.Tensor | None = None  # 2x3 tensor containing the min/max values of the dataset's bounding box
-            self.point_cloud: BasicPointCloud | None = None
-            self.num_training_cameras: int = 1
-            self.mode: str = 'train'
-            self.data: dict[str, list[CameraProperties]] = self.load()
-            if self._bounding_box is not None:
-                self._bounding_box = self._bounding_box.cpu()
-            self.convertToInternalCoordinateSystem(camera_system=self.camera_coordinate_system, world_system=self.world_coordinate_system)
-            self.normalizePoses('train', cube_side=self.NORMALIZE_CUBE, recenter=self.NORMALIZE_RECENTER)
-            self.ray_collection: dict[str, torch.Tensor | None] = {subset: None for subset in self.subsets}
-            self.on_device = False
-            if self.TO_DEVICE:
-                self.toDefaultDevice(['train'])
-            if self.PRECOMPUTE_RAYS:
-                self.precomputeRays(['train'])
+            # load and process dataset
+            self.cameras, self.data = self.load()
+            self.ray_collection: dict[str, RayCollection | None] = {subset: None for subset in self.subsets}
+            if self.NORMALIZE_CUBE is not None or self.NORMALIZE_RECENTER:
+                self.normalize('train', self.NORMALIZE_CUBE, self.NORMALIZE_RECENTER)
 
-    def setMode(self, mode: str) -> 'BaseDataset':
+    def set_mode(self, mode: str) -> 'BaseDataset':
         """Sets the dataset's mode to a given string."""
         self.mode = mode
         if self.mode not in self.subsets:
             raise Framework.DatasetError(f'requested invalid dataset mode: "{mode}"\n'
-                               f'available option are: {self.subsets}')
+                                         f'available option are: {self.subsets}')
         return self
 
     def train(self) -> 'BaseDataset':
         """Sets the dataset's mode to training."""
-        return self.setMode('train')
+        return self.set_mode('train')
 
     def test(self) -> 'BaseDataset':
         """Sets the dataset's mode to testing."""
-        self.mode = 'test'
-        return self.setMode('test')
+        return self.set_mode('test')
 
     def eval(self) -> 'BaseDataset':
         """Sets the dataset's mode to validation."""
-        return self.setMode('val')
+        return self.set_mode('val')
 
     @abstractmethod
-    def load(self) -> dict[str, list[CameraProperties] | None]:
-        """Loads the dataset into a dict containing lists of CameraProperties for training, evaluation, and testing."""
-        return {}
+    def load(self) -> tuple[list[BaseCamera], dict[str, list[View] | None]]:
+        """Parses the dataset-specific format into the data model."""
+        pass
 
     def __len__(self) -> int:
         """Returns the size of the dataset depending on its current mode."""
         return len(self.data[self.mode])
 
-    def __getitem__(self, index: int) -> CameraProperties:
+    def __getitem__(self, index: int) -> View:
         """Fetch specified item(s) from dataset."""
-        element: CameraProperties = self.data[self.mode][index]
-        return element.toDefaultDevice()
+        return self.data[self.mode][index]
 
-    def toDefaultDevice(self, subsets: list[str] | None = None) -> None:
-        """Moves the specified dataset subsets to the default device."""
-        if subsets is None:
-            subsets = self.data.keys()
-        for subset in subsets:
-            self.data[subset] = [i.toDefaultDevice() for i in self.data[subset]]
+    def __iter__(self) -> Iterator[View]:
+        return iter(self.data[self.mode])
+
+    @property
+    def default_camera(self) -> BaseCamera:
+        """Returns the dataset's default camera."""
+        return self.cameras[DEFAULT_CAMERA_INDEX]
+
+    @property
+    def default_view(self) -> View:
+        """Returns the dataset's default view."""
+        for subset in self.subsets:
+            if len(self.data[subset]) > 0:
+                return self.data[subset][DEFAULT_VIEW_INDEX]
+        cam_position = np.array([0.0, -1.0, -2.0])
+        lookat_point = np.array([0.0, -1.0, 0.0])
+        up_axis = np.array([0.0, -1.0, 0.0])
+        default_c2w = look_at(cam_position, lookat_point, up_axis)
+        return View(self.default_camera, DEFAULT_CAMERA_INDEX, 0, 0, default_c2w)
+
+    @property
+    def point_cloud(self) -> BasicPointCloud | None:
+        """Returns the dataset's point cloud."""
+        return self._point_cloud
+
+    @point_cloud.setter
+    def point_cloud(self, new_point_cloud: BasicPointCloud) -> None:
+        """Sets the dataset's point cloud."""
+        if not isinstance(new_point_cloud, BasicPointCloud):
+            raise Framework.DatasetError(f'point cloud must be specified as BasicPointCloud, got {type(new_point_cloud)}')
+        if self._point_cloud is not None:
+            Logger.log_warning(f'overwriting existing point cloud: {self._point_cloud}')
+        self._point_cloud = new_point_cloud
+        Logger.log_info(f'point cloud set to: {self._point_cloud}')
+
+    @property
+    def bounding_box(self) -> AxisAlignedBox:
+        """Returns the dataset's bounding box."""
+        if self._bounding_box is None:
+            Logger.log_info('bounding box not set, estimating from dataset')
+            self.estimate_bounding_box()
+        return self._bounding_box
+
+    @bounding_box.setter
+    def bounding_box(self, new_bounding_box: torch.Tensor | AxisAlignedBox) -> None:
+        """Sets the dataset's bounding box."""
+        if isinstance(new_bounding_box, torch.Tensor):
+            new_bounding_box = AxisAlignedBox(new_bounding_box)
+        if not isinstance(new_bounding_box, AxisAlignedBox):
+            raise Framework.DatasetError(f'bounding box must be specified as torch.Tensor or AxisAlignedBox, got {type(new_bounding_box)}')
         if self._bounding_box is not None:
-            self._bounding_box = self._bounding_box.to(Framework.config.GLOBAL.DEFAULT_DEVICE)
-        if self.point_cloud is not None:
-            self.point_cloud.toDevice(Framework.config.GLOBAL.DEFAULT_DEVICE)
-        self.on_device = True
+            Logger.log_warning(f'overwriting existing bounding box: {self._bounding_box}')
+        self._bounding_box = new_bounding_box
+        Logger.log_info(f'bounding box set to: {self._bounding_box}')
 
-    def precomputeRays(self, subsets: list[str] | None = None) -> None:
+    def estimate_bounding_box(self) -> None:
+        """Estimates the dataset's bounding box from the available data."""
+        if self._point_cloud is not None:
+            Logger.log_info(f'using axis-aligned bounding box of point cloud')
+            self.bounding_box = self._point_cloud.get_aabb()
+        elif len(self.train()) > 0:
+            # TODO: extract into util function
+            Logger.log_info(f'estimating axis-aligned bounding box from near and far planes of training views')
+            min_max = torch.tensor([[torch.inf, torch.inf, torch.inf], [-torch.inf, -torch.inf, -torch.inf]])
+            for view in self.train():
+                # TODO: use numpy here?
+                # FIXME: if there is distortion, this is not fully correct
+                xy_screen_bounds = torch.tensor([
+                    [0.0, 0.0],
+                    [0.0, view.camera.height],
+                    [view.camera.width, view.camera.height],
+                    [view.camera.width, 0.0]
+                ])[None, :, :].expand(2, -1, -1).reshape(-1, 2)  # [0,0], [0,h], [w,h], [w,0], [0,0], [0,h], [w,h], [w,0]
+                depths = torch.tensor([
+                    view.camera.near_plane, view.camera.far_plane
+                ])[:, None].expand(2, 4).reshape(-1, 1)  # [near, near, near, near, far, far, far, far]
+                frustum_bounds_world = view.unproject_points(xy_screen_bounds, depths)
+                min_max[0] = torch.min(min_max[0], frustum_bounds_world.min(dim=0).values)
+                min_max[1] = torch.max(min_max[1], frustum_bounds_world.max(dim=0).values)
+            self.bounding_box = AxisAlignedBox(min_max)
+        else:
+            raise Framework.DatasetError('cannot estimate bounding box, neither point cloud nor training views available')
+
+    def precompute_rays(self, subsets: str | list[str] | None = None, store_on_cpu: bool = False) -> None:
         """Precomputes the rays for the specified dataset subsets."""
         if subsets is None:
             subsets = self.data.keys()
+        elif isinstance(subsets, str):
+            subsets = [subsets]
+
+        old_mode = self.mode
         for subset in subsets:
-            self.setMode(subset)
-            self.getAllRays()
+            self.set_mode(subset)
+            if self.ray_collection[self.mode] is None:
+                self.ray_collection[self.mode] = self.compute_all_rays(store_on_cpu=store_on_cpu, as_ray_collection=True)
+        self.set_mode(old_mode)
 
-    def getAllRays(self) -> torch.Tensor:
-        """Returns all rays of the current dataset mode."""
-        if self.ray_collection[self.mode] is None:
-            # generate rays for all data points
-            cp = self.camera.properties
-            self.ray_collection[self.mode] = torch.cat([self.camera.setProperties(i).generateRays().cpu() for i in self], dim=0)
-            if self.on_device:
-                self.ray_collection[self.mode] = self.ray_collection[self.mode].to(Framework.config.GLOBAL.DEFAULT_DEVICE)
-            last_index = 0
-            for properties in self.data[self.mode]:
-                num_pixels = properties.width * properties.height
-                if properties._precomputed_rays is None:
-                    properties._precomputed_rays = self.ray_collection[self.mode][last_index:last_index + num_pixels]
-                last_index += num_pixels
-            self.camera.setProperties(cp)
-        return self.ray_collection[self.mode]
+    def get_total_ray_count(self) -> int:
+        """Returns the total number of rays for the current dataset mode."""
+        if self.ray_collection[self.mode] is not None:
+            return len(self.ray_collection[self.mode])
+        return sum(view.camera.width * view.camera.height for view in self.data[self.mode])
 
-    def normalizePoses(self, reference_set: str = None, cube_side: float = None, recenter: bool = True) -> None:
-        """Recenters and/or scales the dataset camera poses to fit into a cube of a given side."""
-        if cube_side is not None or recenter:
-            # get min/max for each axis over all data points in reference set (or all data points if no reference set is given)
-            reference_samples = []
-            for subset_key in self.data.keys():
-                if reference_set is None or subset_key == reference_set:
-                    reference_samples += self.data[subset_key]
-            reference_positions = torch.stack([sample.c2w[:3, -1] for sample in reference_samples if sample.c2w is not None], dim=0)
-            min_position = reference_positions.min(dim=0, keepdim=True).values
-            max_position = reference_positions.max(dim=0, keepdim=True).values
-            # compute center and scale factor
-            center = ((min_position + max_position) * 0.5) if recenter else torch.zeros((1, 3), device=torch.device('cpu'))
-            scale = (cube_side / (max_position - min_position).max()).item() if cube_side is not None and cube_side > 0.0 else 1.0
-            # apply centering and scaling to all data points in all subsets
-            for subset in self.data.values():
-                for sample in subset:
-                    if sample.c2w is not None:
-                        c2w = sample.c2w.clone()
-                        c2w[:3, -1] = (c2w[:3, -1] - center) * scale
-                        sample.c2w = c2w
-                        # update depth
-                        if sample.depth is not None:
-                            sample.depth *= scale
-            # update camera near/far planes
-            self.camera.near_plane *= scale
-            self.camera.far_plane *= scale
-            # update bounding box and point cloud
-            if self._bounding_box is not None:
-                self._bounding_box = (self._bounding_box - center) * scale
-            if self.point_cloud is not None:
-                self.point_cloud.normalize(center, scale)
+    def get_all_rays(self) -> RayBatch:
+        """Returns all rays for the current dataset mode."""
+        # TODO: this currently is only used by RayPoolSampler for randomly sampling all images in train/val iterations
+        #  we should rework this function and the RayPoolSampler to support the following three workflows:
+        #     1. rays fit into VRAM -> precompute before training and store in VRAM
+        #     2. rays fit into RAM but not VRAM -> precompute before training, store in RAM, upload batch-wise to VRAM
+        #     3. (new) sample pixels from all images, compute rays dynamically on CPU/GPU depending on required memory
+        if self.ray_collection[self.mode] is not None:
+            return self.ray_collection[self.mode].all_rays
+        return self.compute_all_rays(store_on_cpu=True)  # assume memory is an issue if rays are not precomputed
 
-    def convertToInternalCoordinateSystem(self,
-                                          camera_system: Callable | None,
-                                          world_system: Callable | None) -> None:
-        """Converts the dataset's camera and world coordinate systems to the framework's internal representation."""
-        if camera_system is not None or world_system is not None:
-            # iter over subsets
-            for subset in self.data.values():
-                # iter over all samples
-                for sample in subset:
-                    if (c2w := sample.c2w) is not None:
-                        c2w = c2w.clone()
-                        # apply camera coordinate system conversion
-                        if camera_system is not None:
-                            c2w[:3, :3] = torch.cat(camera_system(*torch.split(c2w[:3, :3], split_size_or_sections=1, dim=1)), dim=1)
-                        # apply world coordinate system conversion
-                        if world_system is not None:
-                            c2w[:3, :] = torch.cat(world_system(*torch.split(c2w[:3, :], split_size_or_sections=1, dim=0)), dim=0)
-                        # set updated transformation
-                        sample.c2w = c2w
-            # update bounding box and point cloud
-            if self._bounding_box is not None and world_system is not None:
-                self._bounding_box = torch.cat(world_system(*torch.split(self._bounding_box, split_size_or_sections=1, dim=1)), dim=1).sort(dim=0).values
-            if self.point_cloud is not None and world_system is not None:
-                self.point_cloud.convert(world_system)
+    def compute_all_rays(self, store_on_cpu: bool = False, as_ray_collection: bool = False) -> RayBatch | RayCollection:
+        """Computes the rays for the current dataset mode."""
+        subset_rays = []
+        subset_camera_slices = []
+        start_idx = 0
+        for view in self:
+            ray_batch = view.get_rays()
+            subset_rays.append(ray_batch.cpu() if store_on_cpu else ray_batch)
+            if as_ray_collection:
+                n_rays = len(ray_batch)
+                subset_camera_slices.append(slice(start_idx, start_idx + n_rays))
+                start_idx += n_rays
+        subset_rays = RayBatch.cat(subset_rays)
+        return RayCollection(subset_rays, subset_camera_slices) if as_ray_collection else subset_rays
 
-    @torch.no_grad()
-    def getBoundingBox(self) -> torch.Tensor:
-        if self._bounding_box is None:
-            Logger.logInfo('calculating dataset bounding box')
-            if self.point_cloud is not None:
-                # calculate bounding box from point cloud
-                self._bounding_box = self.point_cloud.getBoundingBox().cpu()
-                Logger.logInfo(f'bounding box estimated from point cloud:'
-                               f' {tensor_to_string(self._bounding_box[0])} (min),'
-                               f' {tensor_to_string(self._bounding_box[1])} (max)')
-            else:
-                # calculate bounding box from camera positions and near/far planes
-                positions = []
-                for sample in self.train():
-                    self.camera.setProperties(sample)
-                    cam_position = sample.c2w[:3, 3]
-                    view_dirs = self.camera.getGlobalRayDirections()
-                    positions.append(cam_position + (view_dirs * self.camera.near_plane))
-                    positions.append(cam_position + (view_dirs * self.camera.far_plane))
-                positions = torch.cat(positions, dim=0)
-                self._bounding_box = torch.stack([positions.min(dim=0).values, positions.max(dim=0).values], dim=0).cpu()
-                Logger.logInfo(f'bounding box estimated from dataset camera poses:'
-                               f' {tensor_to_string(self._bounding_box[0])} (min),'
-                               f' {tensor_to_string(self._bounding_box[1])} (max)')
-        return self._bounding_box
-
-    def addCameraPropertyFields(self, fields: list[tuple[str, type, Any]], new_class_name: str = 'CustomCameraProperties') -> None:
-        """Adds a new data field to the dataset."""
-        new_class = dataclasses.make_dataclass(new_class_name, fields=[(f[0], f[1], dataclasses.field(default=f[2])) for f in fields], bases=(CameraProperties,))
+    def normalize(self, reference_set: str = None, cube_side: float = None, recenter: bool = True) -> None:
+        """Recenters and/or scales the dataset so that the camera poses to fit into a cube with the given side length."""
+        # get min/max for each axis over all data points in reference set (or all data points if no reference set is given)
+        # FIXME: cpu vs gpu and numpy vs torch is a mess here
+        reference_views = []
+        for subset_key in self.data.keys():
+            if reference_set is None or subset_key == reference_set:
+                reference_views += self.data[subset_key]
+        reference_positions = torch.stack([view.position.cpu() for view in reference_views])
+        min_position = reference_positions.min(dim=0).values
+        max_position = reference_positions.max(dim=0).values
+        # compute center and scale factor
+        center = ((min_position + max_position) * 0.5) if recenter else torch.zeros(3, dtype=torch.float32, device=torch.device('cpu'))
+        scale = (cube_side / (max_position - min_position).max()).item() if cube_side is not None and cube_side > 0.0 else 1.0
+        # apply centering and scaling to all data points in all subsets
         for subset in self.data.values():
-            for sample in subset:
-                sample.__class__ = new_class
+            for view in subset:
+                view.recenter_and_scale(center.cpu().numpy().astype(np.float64), scale)
+        # update camera near/far planes
+        self._camera_settings.near_plane *= scale
+        self._camera_settings.far_plane *= scale
+        # update bounding box and point cloud
+        if self._bounding_box is not None:
+            self._bounding_box.normalize(center, scale)
+        if self._point_cloud is not None:
+            self._point_cloud.normalize(center, scale)
+        Logger.log_info(f'normalized cameras to fit into {self._bounding_box} with center at {center.tolist()}')  # FIXME: self._bounding_box can be None

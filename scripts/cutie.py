@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-# -- coding: utf-8 --
 
 """
 cutie.py: Run manual segmentation using Cutie on a directory of video frames.
@@ -11,15 +10,14 @@ import shutil
 import subprocess
 from argparse import ArgumentParser
 from pathlib import Path
+
 import torch
 
 import utils
-
-with utils.discoverSourcePath():
+with utils.DiscoverSourcePath():
     import Framework
     from Logging import Logger
-    from Datasets.utils import list_sorted_files, list_sorted_directories, \
-        loadImage, saveImage
+    from Datasets.utils import list_sorted_files, list_sorted_directories, load_image, save_image
 
 
 ENV_NAME = 'cutie-pytorch'
@@ -29,10 +27,10 @@ GIT_URL = 'https://github.com/hkchengrex/Cutie.git'
 @torch.no_grad()
 def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pattern: str = None,
          colmap_format: bool = False) -> bool:
-    git_path = Path(utils.getCachePath() / 'Cutie')
+    git_path = Path(Framework.Directories.CACHE_DIR / 'Cutie')
     # install if necessary
     if not git_path.exists():
-        Logger.logInfo('Cloning Cutie...')
+        Logger.log_info('Cloning Cutie...')
         # clone repo
         command: list[str] = [
             'git', 'clone',
@@ -40,19 +38,19 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             str(git_path),
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError('Failed to clone Cutie.')
+            Logger.log_error('Failed to clone Cutie.')
             return False
         # setup conda env
-        Logger.logInfo('Creating conda env...')
+        Logger.log_info('Creating conda env...')
         command = [
             'conda', 'create',
             '--name', ENV_NAME,
             'python=3.8',
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError(f'Failed to create conda environment "{ENV_NAME}" using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to create conda environment "{ENV_NAME}" using command: {" ".join(command)}')
             return False
-        Logger.logInfo('Installing dependencies...')
+        Logger.log_info('Installing dependencies...')
         # pytorch
         command = [
             'conda', 'run',
@@ -64,7 +62,7 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             '--index-url', 'https://download.pytorch.org/whl/cu118',
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError(f'Failed to install PyTorch using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to install PyTorch using command: {" ".join(command)}')
             return False
         # cutie dependencies
         command = [
@@ -74,7 +72,7 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             'pip', 'install', '-e', '.',
         ]
         if subprocess.run(command, cwd=git_path, check=False).returncode != 0:
-            Logger.logError(f'Failed to install Cutie using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to install Cutie using command: {" ".join(command)}')
             return False
         command = [
             'conda', 'run',
@@ -85,7 +83,7 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             '-y',
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError(f'Failed to uninstall OpenCV using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to uninstall OpenCV using command: {" ".join(command)}')
             return False
 
         command = [
@@ -96,10 +94,10 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             'opencv-python-headless',
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError(f'Failed to install OpenCV Headless using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to install OpenCV Headless using command: {" ".join(command)}')
             return False
         # download checkpoint
-        Logger.logInfo('Downloading checkpoint...')
+        Logger.log_info('Downloading checkpoint...')
         command = [
             'conda', 'run',
             '--no-capture-output',
@@ -107,16 +105,19 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             'python', 'cutie/utils/download_models.py',
         ]
         if subprocess.run(command, cwd=git_path, check=False).returncode != 0:
-            Logger.logError(f'Failed to download model using command: {" ".join(command)}')
+            Logger.log_error(f'Failed to download model using command: {" ".join(command)}')
             return False
     # run on subdirectories
     if recursive:
         subdirs = [base_path / i for i in list_sorted_directories(base_path)]
         for subdir in subdirs:
-            main(subdir,
-                 output_path if output_path is None else output_path / subdir.name,
-                 recursive,
-                 file_pattern)
+            main(
+                base_path=subdir,
+                output_path=output_path if output_path is None else output_path / subdir.name,
+                recursive=recursive,
+                file_pattern=file_pattern,
+                colmap_format=colmap_format
+            )
     # scan images
     filenames = [i for i in list_sorted_files(base_path, pattern=file_pattern)
                  if Path(i).suffix.lower() in ['.png', '.jpg']]
@@ -125,12 +126,12 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
         output_dir = base_path / 'segmentation'
     else:
         output_dir = output_path
-    os.makedirs(str(output_dir), exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     tmp_img_path = git_path / 'examples' / 'tmp_images'
     workspace_path = git_path / 'workspace' / 'tmp_images'
 
-    def cleanCutieWorkspace():
+    def clean_cutie_workspace():
         """Clean the Cutie workspace."""
         tmp_img_path.mkdir(parents=True, exist_ok=True)
         if tmp_img_path.exists():
@@ -146,15 +147,15 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
                 else:
                     shutil.rmtree(child)
 
-    cleanCutieWorkspace()
+    clean_cutie_workspace()
     # run
     if filenames:
-        Logger.logInfo(f'Running Cutie on sequence directory: "{base_path}"...')
-        Logger.logInfo(f'Found {len(filenames)} images')
+        Logger.log_info(f'Running Cutie on sequence directory: "{base_path}"...')
+        Logger.log_info(f'Found {len(filenames)} images')
         # copy images to workspace
-        for i in Logger.logProgressBar(filenames, desc='Copying images', leave=False):
-            rgb, _ = loadImage(base_path / i, scale_factor=None)
-            saveImage(tmp_img_path / (i.split('.')[0] + '.jpg'), rgb)
+        for i in Logger.log_progress(filenames, desc='Copying images', leave=False):
+            rgb, _ = load_image(base_path / i, scale_factor=None)
+            save_image(tmp_img_path / (i.split('.')[0] + '.jpg'), rgb)
         # run Cutie
         command: list[str] = [
             'conda', 'run',
@@ -165,26 +166,26 @@ def main(*, base_path: Path, output_path: Path | None, recursive: bool, file_pat
             '--num_objects', str(input('enter max number of objects: ')),
         ]
         if subprocess.run(command, cwd=git_path, check=False).returncode != 0:
-            Logger.logError('Failed to run Cutie.')
+            Logger.log_error('Failed to run Cutie.')
             return False
         # copy and invert masks
         mask_path = git_path / 'workspace' / 'tmp_images' / 'binary_masks'
-        for i in Logger.logProgressBar(filenames, desc='Saving masks', leave=False):
+        for i in Logger.log_progress(filenames, desc='Saving masks', leave=False):
             filename = i.split('.')[0]
-            rgb, _ = loadImage(mask_path / (filename + '.png'), scale_factor=None)
+            rgb, _ = load_image(mask_path / (filename + '.png'), scale_factor=None)
             outname = i
             if colmap_format:
                 rgb = 1.0 - rgb
                 outname = outname + '.png'
-            saveImage(output_dir / outname, rgb)
-        Logger.logInfo('done.')
-        cleanCutieWorkspace()
+            save_image(output_dir / outname, rgb)
+        Logger.log_info('done.')
+        clean_cutie_workspace()
     return True
 
 
 if __name__ == '__main__':
     # parse command line args
-    parser: ArgumentParser = ArgumentParser(
+    parser = ArgumentParser(
         prog='cutie.py',
         description='Run manual segmentation using Cutie on a directory of video frames.'
     )
@@ -193,7 +194,7 @@ if __name__ == '__main__':
         required=True, help='Path to the base directory containing the input images.'
     )
     parser.add_argument(
-        '-r', '--recusive', action='store_true', dest='recursive',
+        '-r', '--recursive', action='store_true', dest='recursive',
         help='Apply recursively on subdirectories.'
     )
     parser.add_argument(
@@ -212,7 +213,7 @@ if __name__ == '__main__':
     # init Framework with defaults
     Framework.setup()
     # run main
-    Logger.setMode(Logger.MODE_VERBOSE)
+    Logger.set_mode(Logger.MODE_VERBOSE)
     main(
         base_path=Path(args.sequence_path),
         output_path=Path(args.output_path) if args.output_path is not None else None,

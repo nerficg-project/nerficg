@@ -1,55 +1,17 @@
-# -- coding: utf-8 --
-
 """
 GaussianSplatting/utils.py: Utility functions for GaussianSplatting.
 """
 
-from dataclasses import dataclass
-
-import numpy as np
 import torch
 
 from Cameras.utils import quaternion_to_rotation_matrix
 
 
-@dataclass(frozen=True)
-class LRDecayPolicy(object):
-    """Allows for flexible definition of a decay policy for a learning rate."""
-    lr_init: float = 1.0
-    lr_final: float = 1.0
-    lr_delay_steps: int = 0
-    lr_delay_mult: float = 1.0
-    max_steps: int = 1000000
-
-    # taken from https://github.com/sxyu/svox2/blob/master/opt/util/util.py#L78
-    def __call__(self, iteration) -> float:
-        """Calculates learning rate for the given iteration."""
-        if iteration < 0 or (self.lr_init == 0.0 and self.lr_final == 0.0):
-            # Disable this parameter
-            return 0.0
-        if self.lr_delay_steps > 0 and iteration < self.lr_delay_steps:
-            # A kind of reverse cosine decay.
-            delay_rate = self.lr_delay_mult + (1 - self.lr_delay_mult) * np.sin(
-                0.5 * np.pi * np.clip(iteration / self.lr_delay_steps, 0, 1)
-            )
-        else:
-            delay_rate = 1.0
-        t = np.clip(iteration / self.max_steps, 0, 1)
-        log_lerp = np.exp(np.log(self.lr_init) * (1 - t) + np.log(self.lr_final) * t)
-        return delay_rate * log_lerp
-
-
-def inverse_sigmoid(x: torch.Tensor) -> torch.Tensor:
-    return torch.log(x / (1.0 - x))
-
-
 def build_covariances(scales: torch.Tensor, rotations: torch.Tensor) -> torch.Tensor:
     R = quaternion_to_rotation_matrix(rotations, normalize=False)
     # add batch dimension if necessary
-    batch_dim_added = False
-    if scales.dim() == 1:
+    if batch_dim_added := scales.dim() == 1:
         scales = scales[None]
-        batch_dim_added = True
     S = torch.diag_embed(scales)
     RS = R @ S
     RSSR = RS @ RS.transpose(-2, -1)

@@ -1,56 +1,55 @@
-# -- coding: utf-8 --
-
 """Cameras/utils.py: Contains utility functions used for the implementation of the available camera models."""
 
-from typing import ClassVar
+import math
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+import numpy as np
 import torch
-from torch import Tensor
-from dataclasses import dataclass, field, fields, replace
 
 import Framework
 
 
 @dataclass
-class DistortionParameters(ABC):
-    """Base Class for storing and applying camera distortion parameters."""
+class BaseDistortion(ABC):
+    """Base class for storing and accessing distortion coefficients."""
+    k1: float = 0.0
+    k2: float = 0.0
+    k3: float = 0.0
+    k4: float = 0.0
+    k5: float = 0.0
+    k6: float = 0.0
+    p1: float = 0.0
+    p2: float = 0.0
+    undistortion_eps: float = 1e-9
+    undistortion_iterations: int = 10
 
     @abstractmethod
-    def distort(self, positions_camera_space: Tensor) -> Tensor:
+    def distort(self, positions_camera_space: torch.Tensor) -> torch.Tensor:
         """Abstract method applying distortion to the given image coordinates.
         Args:
-            positions_camera_space (Tensor): normalized 2D positions (x,y) in camera space (ndc), shape (N, 2).
+            positions_camera_space (torch.Tensor): normalized 2D positions (x,y) in camera space (ndc), shape (N, 2).
 
         Returns:
-            Tensor: Distorted normalized 2D positions (x,y) in camera space (ndc), shape (N, 2).
+            torch.Tensor: Distorted normalized 2D positions (x,y) in camera space (ndc), shape (N, 2).
         """
         pass
 
     @abstractmethod
-    def undistort(self, positions_camera_space: Tensor) -> Tensor:
+    def undistort(self, positions_camera_space: torch.Tensor) -> torch.Tensor:
         """Abstract method removing distortion from the given image coordinates.
 
         Args:
-            positions_camera_space (Tensor): Distorted 2D positions (x,y) in normalized camera space (ndc), shape (N, 2).
+            positions_camera_space (torch.Tensor): Distorted 2D positions (x,y) in normalized camera space (ndc), shape (N, 2).
 
         Returns:
-            Tensor: Undistorted 2D positions (x,y) in normalized camera space (ndc), shape (N, 2).
+            torch.Tensor: Undistorted 2D positions (x,y) in normalized camera space (ndc), shape (N, 2).
         """
         pass
 
 
-class IdentityDistortion(DistortionParameters):
-    """apply indentity as distortion"""
-
-    def distort(self, positions_camera_space: Tensor) -> Tensor:
-        return positions_camera_space
-
-    def undistort(self, positions_camera_space: Tensor) -> Tensor:
-        return positions_camera_space
-
-
 @dataclass
-class RadialTangentialDistortion(DistortionParameters):
+class RadialTangentialDistortion(BaseDistortion):
     """
     A Class for storing and applying radial and tangential distortion parameters.
     Adapted from:
@@ -58,22 +57,15 @@ class RadialTangentialDistortion(DistortionParameters):
     and
     From https://github.com/google/nerfies/blob/main/nerfies/camera.py
     """
-    k1: float = 0.0
-    k2: float = 0.0
-    k3: float = 0.0
-    # k4: float = 0.0
-    p1: float = 0.0
-    p2: float = 0.0
-    eps: float = 1e-9
-    num_iter: int = 10
 
     def _compute_residual_and_jacobian(
         self,
-        x: Tensor,
-        y: Tensor,
-        xd: Tensor,
-        yd: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        x: torch.Tensor,
+        y: torch.Tensor,
+        xd: torch.Tensor,
+        yd: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # FIXME: probably only partially correct
         r = x * x + y * y
         # d = 1.0 + r * (self.k1 + r * (self.k2 + r * (self.k3 + r * self.k4)))
         d = 1.0 + r * (self.k1 + r * (self.k2 + self.k3 * r))
@@ -93,26 +85,26 @@ class RadialTangentialDistortion(DistortionParameters):
 
         return fx, fy, fx_x, fx_y, fy_x, fy_y
 
-    def undistort(self, positions_camera_space: Tensor):
+    def undistort(self, positions_camera_space: torch.Tensor):
         x_dir, y_dir = positions_camera_space.split(1, dim=-1)
         x = x_dir.clone()
         y = y_dir.clone()
-        for _ in range(self.num_iter):
+        for _ in range(self.undistortion_iterations):
             fx, fy, fx_x, fx_y, fy_x, fy_y = self._compute_residual_and_jacobian(x=x, y=y, xd=x_dir, yd=y_dir)
             denominator = fy_x * fx_y - fx_x * fy_y
             x_numerator = fx * fy_y - fy * fx_y
             y_numerator = fy * fx_x - fx * fy_x
             step_x = torch.where(
-                torch.abs(denominator) > self.eps, x_numerator / denominator,
+                torch.abs(denominator) > self.undistortion_eps, x_numerator / denominator,
                 torch.zeros_like(denominator))
             step_y = torch.where(
-                torch.abs(denominator) > self.eps, y_numerator / denominator,
+                torch.abs(denominator) > self.undistortion_eps, y_numerator / denominator,
                 torch.zeros_like(denominator))
             x = x + step_x
             y = y + step_y
-        return torch.cat([x, y], axis=-1)
+        return torch.cat([x, y], dim=-1)
 
-    def distort(self, positions_camera_space: Tensor):
+    def distort(self, positions_camera_space: torch.Tensor):
         # adapted from ADOP: https://github.com/darglein/saiga/blob/master/shader/vision/distortion.glsl
         x_dir, y_dir = positions_camera_space[..., 0], positions_camera_space[..., 1]
         x2 = torch.square(x_dir)
@@ -135,225 +127,127 @@ class RadialTangentialDistortion(DistortionParameters):
         return positions_undistorted
 
 
-# class FisheyeLens(DistortionParameters):
+# class FisheyeLens(BaseDistortion):
 
-#     def distort(self, positions_camera_space: Tensor) -> Tensor:
+#     def distort(self, positions_camera_space: torch.Tensor) -> torch.Tensor:
 #         theta = torch.sqrt(torch.sum(torch.square(positions_camera_space), axis=-1))
 #         theta.clamp_max_(torch.pi)
 #         sin_theta_over_theta = torch.sin(theta) / theta
 #         z = -torch.cos(theta).clamp_min_(1e-6)
 #         return torch.cat([positions_camera_space[..., 0] * sin_theta_over_theta / z, -positions_camera_space[..., 1] * sin_theta_over_theta / z], axis=-1)
 
-#     def undistort(self, positions_camera_space: Tensor) -> Tensor:
+#     def undistort(self, positions_camera_space: torch.Tensor) -> torch.Tensor:
 #         raise NotImplementedError
 #         # theta = torch.acos(-directions_camera_space[..., 2])
 #         # return torch.cat([directions_camera_space[..., 0] / torch.sin(theta), -directions_camera_space[..., 1] / torch.sin(theta)], axis=-1)
 
 
-def transformPoints(points: Tensor, transform: Tensor) -> Tensor:
-    """
-    Transforms the given points by the given homogeneous transformation matrix.
+def look_at(eye: np.ndarray, lookat: np.ndarray, up: np.ndarray) -> np.ndarray:
+    """Creates a camera-to-world matrix looking from eye to position with the given up vector."""
+    forward = lookat - eye
+    forward /= np.linalg.norm(forward)
+    right = np.cross(forward, up)
+    right /= np.linalg.norm(right)
+    down = np.cross(forward, right)
+    down /= np.linalg.norm(down)
 
-    Args:
-        points:     Torch tensor of shape (N, 3) containing the points to transform.
-        transform:  Torch tensor of shape (4, 4) containing the transformation matrix.
-
-    Returns:
-        Torch tensor of shape (N, 3) containing the transformed points.
-    """
-    return torch.matmul(transform[:3, :3], points[..., None])[..., 0] + transform[:3, 3]
-
-
-def normalizeRays(ray: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Normalizes a vector."""
-    norm = torch.linalg.norm(ray, dim=-1, keepdim=True)
-    return ray / norm, norm
-
-
-def createCameraMatrix(view_dir: torch.Tensor, up_dir: torch.Tensor, position: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Creates a view matrix."""
-    forward, forward_norm = normalizeRays(view_dir)
-    if forward_norm < eps:
-        raise Framework.CameraError("The view direction vector is too small.")
-    right, right_norm = normalizeRays(torch.cross(forward, up_dir))
-    # right, right_norm = normalizeRays(torch.cross(up_dir, forward))
-    if right_norm < eps:
-        raise Framework.CameraError("The up-vector is colinear to the view direction.")
-    # up, _ = normalizeRays(torch.cross(forward, right))
-    up, _ = normalizeRays(torch.cross(right, forward))
-    return torch.cat([torch.stack([right, -up, -forward, position], dim=1),
-                      torch.tensor([[0, 0, 0, 1]], dtype=forward.dtype, device=forward.device)], dim=0)
-
-
-def createLookAtMatrix(position: torch.Tensor, lookat: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    """Returns a c2w matrix looking at a point from a given position and up vector."""
-    return createCameraMatrix(lookat - position, up, position)
+    c2w = np.eye(4)
+    c2w[:3, 0] = right
+    c2w[:3, 1] = down
+    c2w[:3, 2] = forward
+    c2w[:3, 3] = eye
+    return c2w
 
 
 @dataclass
-class CameraProperties:
-    """
-    A Class for all kinds of image sensor data.
-
-    Attributes:
-        width                 Integer representing the image's width.
-        height                Integer representing the image's height.
-        rgb                   Torch tensor of shape (3, H, W) containing the RGB image.
-        alpha                 Torch tensor of shape (1, H, W) containing the foreground mask.
-        depth                 Torch tensor of shape (1, H, W) containing the depth image.
-        c2w                   Torch tensor of shape (4, 4) containing the camera to world matrix.
-        principal_offset_x    Float stating the principal point's offset from the image center in pixels (positive value -> right)
-        principal_offset_y    Float stating the principal point's offset from the image center in pixels (positive value -> down)
-        focal_x               Float representing the image sensor's focal length (in pixels) in x direction.
-        focal_y               Float representing the image sensor's focal length (in pixels) in y direction.
-        timestamp             Float stating normalized chronological timestamp at which the sample was recorded.
-        camera_index          The camera index during capturing (for multi-view recordings).
-        exposure_value        Float representing the cameras exposure value.
-        distortion_parameters DistortionParameters object containing the camera's distortion parameters.
-        forward_flow          Torch tensor of shape (2, H, W) containing the forward optical flow.
-        backward_flow         Torch tensor of shape (2, H, W) containing the backward optical flow.
-    """
-    width: int | None = None
-    height: int | None = None
-    rgb: Tensor | None = None
-    alpha: Tensor | None = None
-    depth: Tensor | None = None
-    segmentation: Tensor | None = None
-    principal_offset_x: float = 0.0
-    principal_offset_y: float = 0.0
-    focal_x: float | None = None
-    focal_y: float | None = None
-    timestamp: float = 0.0
-    camera_index: int = 0
-    _default_exposure_value: float = 0.0
-    exposure_value: float = field(default_factory=lambda: CameraProperties._default_exposure_value)
-    distortion_parameters: DistortionParameters | None = None
-    forward_flow: Tensor | None = None
-    backward_flow: Tensor | None = None
-    c2w: Tensor = torch.eye(4, device=torch.device('cpu'))  # camera to world matrix (inverse of view matrix)
-    _precomputed_rays: Tensor | None = field(init=False, repr=False, default=None)  # precomputed rays for faster ray sampling
-    _is_device_copy: bool = False
-    _misc: Tensor | None = None
+class SharedCameraSettings:
+    """A container class for virtual camera settings."""
+    background_color: torch.Tensor
+    near_plane: float
+    far_plane: float
 
     def __post_init__(self):
-        if self.distortion_parameters is None:
-            self.distortion_parameters = IdentityDistortion()
-        if not self._is_device_copy:
-            # convert all tensors to cpu
-            for member in fields(self):
-                val = getattr(self, member.name)
-                if isinstance(val, Tensor):
-                    setattr(self, member.name, val.cpu())
-
-    @classmethod
-    def set_default_exposure(cls, value: float) -> None:
-        cls._default_exposure_value = value
-
-    @property
-    def w2c(self) -> Tensor:
-        return torch.linalg.inv(self.c2w)
-
-    @w2c.setter
-    def w2c(self, value: Tensor) -> None:
-        self.c2w = torch.linalg.inv(value)
-
-    @property
-    def R(self) -> Tensor:
-        return self.c2w[:3, :3]
-
-    @R.setter
-    def R(self, value: Tensor) -> None:
-        if value.shape != (3, 3):
-            raise Framework.CameraError('R must be a 3x3 matrix')
-        self.c2w[:3, :3] = value
-
-    @property
-    def T(self) -> Tensor:
-        return self.c2w[:3, 3]
-
-    @T.setter
-    def T(self, value: Tensor) -> None:
-        if value.shape != (3,):
-            raise Framework.CameraError('T must be a 3D vector')
-        self.c2w[:3, 3] = value
-
-    def toDefaultDevice(self) -> 'CameraProperties':
-        """returns a shallow copy where all torch Tensors are cast to the default device"""
-        return replace(self, _is_device_copy=True, **{field.name: getattr(self, field.name).to(Framework.config.GLOBAL.DEFAULT_DEVICE, copy=True)
-                       for field in fields(self) if isinstance(getattr(self, field.name), Tensor) and not field.name.startswith('_')})
-
-    def toSimple(self):
-        return replace(self, **{field.name: (None if field.name != 'c2w' else getattr(self, field.name).cpu().clone()) for field in fields(self) if isinstance(getattr(self, field.name), Tensor)})
+        if self.background_color.shape != (3,):
+            raise Framework.CameraError(
+                f'background_color must be a torch tensor of shape (3,), but got {self.background_color.shape}'
+            )
+        if self.near_plane <= 0 or self.far_plane <= self.near_plane:
+            raise Framework.CameraError(
+                f'invalid near and far plane values (near_plane={self.near_plane}, far_plane={self.far_plane}). Must be: 0 < near_plane < far_plane'
+            )
 
 
-@dataclass(frozen=True)
-class RayPropertySlice:
-    """Stores slice objects used to access specific elements within ray tensors."""
-    origin: ClassVar[slice] = slice(0, 3)
-    origin_xy: ClassVar[slice] = slice(0, 2)
-    origin_xz: ClassVar[slice] = slice(0, 3, 2)
-    origin_yz: ClassVar[slice] = slice(1, 3)
-    direction: ClassVar[slice] = slice(3, 6)
-    direction_xy: ClassVar[slice] = slice(3, 5)
-    direction_xz: ClassVar[slice] = slice(3, 6, 2)
-    direction_yz: ClassVar[slice] = slice(4, 6)
-    view_direction: ClassVar[slice] = slice(6, 9)
-    rgb: ClassVar[slice] = slice(9, 12)
-    alpha: ClassVar[slice] = slice(12, 13)
-    rgba: ClassVar[slice] = slice(9, 13)
-    depth: ClassVar[slice] = slice(13, 14)
-    timestamp: ClassVar[slice] = slice(14, 15)
-    xy_coordinates: ClassVar[slice] = slice(15, 17)
-    x_coordinate: ClassVar[slice] = slice(15, 16)
-    y_coordinate: ClassVar[slice] = slice(16, 17)
-    all_annotations: ClassVar[slice] = slice(9, 17)  # rgb, alpha, depth, timestamp, xy_coordinates
-    all_annotations_ndc: ClassVar[slice] = slice(6, 17)  # also contains view direction
-
-
-def quaternion_to_rotation_matrix(quaternions: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+def quaternion_to_rotation_matrix(quaternions: np.ndarray | torch.Tensor, normalize: bool = True) -> np.ndarray | torch.Tensor:
     """Converts quaternions to 3x3 rotation matrices."""
     # add batch dimension if not present
-    batch_dim_added = quaternions.dim() == 1
-    if batch_dim_added:
+    if batch_dim_added := quaternions.ndim == 1:
         quaternions = quaternions[None]
-    # optionally also take care of normalization
-    if normalize:
-        quaternions = torch.nn.functional.normalize(quaternions)
-    # allocate memory for the matrices
-    R = torch.empty((quaternions.shape[0], 3, 3), dtype=quaternions.dtype, device=quaternions.device)
+    # optionally take care of normalization and allocate memory for the matrices
+    if isinstance(quaternions, torch.Tensor):
+        if normalize:
+            quaternions = torch.nn.functional.normalize(quaternions)  # uses 1e-12 as epsilon to prevent zero divisions
+        rotation_matrix = torch.empty((quaternions.shape[0], 3, 3), dtype=quaternions.dtype, device=quaternions.device)
+    else:
+        if normalize:
+            quaternions = quaternions / np.linalg.norm(quaternions, axis=1, keepdims=True)
+        rotation_matrix = np.empty((quaternions.shape[0], 3, 3), dtype=quaternions.dtype)
     # conversion
-    r, i, j, k = torch.unbind(quaternions, dim=1)
-    R[:, 0, 0] = 1.0 - 2.0 * (j * j + k * k)
-    R[:, 0, 1] = 2.0 * (i * j - r * k)
-    R[:, 0, 2] = 2.0 * (i * k + r * j)
-    R[:, 1, 0] = 2.0 * (i * j + r * k)
-    R[:, 1, 1] = 1.0 - 2.0 * (i * i + k * k)
-    R[:, 1, 2] = 2.0 * (j * k - r * i)
-    R[:, 2, 0] = 2.0 * (i * k - r * j)
-    R[:, 2, 1] = 2.0 * (j * k + r * i)
-    R[:, 2, 2] = 1.0 - 2.0 * (i * i + j * j)
-    return R[0] if batch_dim_added else R
+    r, i, j, k = quaternions.T
+    ii2, jj2, kk2 = i * i * 2, j * j * 2, k * k * 2
+    ij2, ik2, jk2 = i * j * 2, i * k * 2, j * k * 2
+    ri2, rj2, rk2 = r * i * 2, r * j * 2, r * k * 2
+    rotation_matrix[:, 0, 0] = 1 - (jj2 + kk2)
+    rotation_matrix[:, 0, 1] = ij2 - rk2
+    rotation_matrix[:, 0, 2] = ik2 + rj2
+    rotation_matrix[:, 1, 0] = ij2 + rk2
+    rotation_matrix[:, 1, 1] = 1 - (ii2 + kk2)
+    rotation_matrix[:, 1, 2] = jk2 - ri2
+    rotation_matrix[:, 2, 0] = ik2 - rj2
+    rotation_matrix[:, 2, 1] = jk2 + ri2
+    rotation_matrix[:, 2, 2] = 1 - (ii2 + jj2)
+    return rotation_matrix[0] if batch_dim_added else rotation_matrix
 
 
-def invert_camera_matrix(matrix: torch.Tensor) -> torch.Tensor:
-    """Inverts a camera matrix with shape (4, 4) consisting of a rotation and translation."""
-    rotation = matrix[:3, :3]
-    translation = matrix[:3, 3]
-    inverted_rotation = rotation.T
-    inverted_translation = inverted_rotation @ -translation
-    inverted_matrix = torch.eye(4, device=matrix.device, dtype=matrix.dtype)
-    inverted_matrix[:3, :3] = inverted_rotation
+def invert_3d_affine(transform: np.ndarray | torch.Tensor, is_rigid: bool = True) -> np.ndarray | torch.Tensor:
+    """Inverts an 3D affine transformation matrix (shape 4x4). Assumes a rigid transformation by default."""
+    if isinstance(transform, torch.Tensor):
+        inverted_upper_3x3 = transform[:3, :3].T if is_rigid else torch.linalg.inv(transform[:3, :3])
+        inverted_matrix = torch.eye(4, device=transform.device, dtype=transform.dtype)
+    else:
+        inverted_upper_3x3 = transform[:3, :3].T if is_rigid else np.linalg.inv(transform[:3, :3])
+        inverted_matrix = np.eye(4, dtype=transform.dtype)
+    inverted_translation = inverted_upper_3x3 @ -transform[:3, 3]
+    inverted_matrix[:3, :3] = inverted_upper_3x3
     inverted_matrix[:3, 3] = inverted_translation
     return inverted_matrix
 
 
-def invert_affine_3d(matrix: torch.Tensor) -> torch.Tensor:
-    """Inverts a 3d affine transformation matrix with shape (4, 4)."""
-    matrix3 = matrix[:3, :3]
-    translation = matrix[:3, 3]
-    inverted_matrix3 = torch.linalg.inv(matrix3)
-    inverted_translation = inverted_matrix3 @ -translation
-    inverted_matrix = torch.eye(4, device=matrix.device, dtype=matrix.dtype)
-    inverted_matrix[:3, :3] = inverted_matrix3
-    inverted_matrix[:3, 3] = inverted_translation
-    return inverted_matrix
+def focal_to_fov(focal: float, degrees: bool = False) -> float:
+    """Converts (normalized) focal length to field of view."""
+    fov_radians = 2 * math.atan(0.5 / focal)
+    return math.degrees(fov_radians) if degrees else fov_radians
+
+
+def fov_to_focal(fov: float, degrees: bool = False) -> float:
+    """Converts field of view to (normalized) focal length."""
+    fov_radians = math.radians(fov) if degrees else fov
+    return 0.5 / math.tan(0.5 * fov_radians)
+
+
+def directions_to_equirectangular_grid_coords(directions: torch.Tensor) -> torch.Tensor:
+    """Converts unit directions to grid coordinates in [-1, 1]^2 using equirectangular projection."""
+    x, y, z = directions.unbind(dim=-1)
+    azimuth = torch.atan2(x, z)
+    elevation = torch.asin(y.clamp(-1.0, 1.0))
+    return torch.stack([azimuth / math.pi, elevation / (0.5 * math.pi)], dim=-1)
+
+def equirectangular_grid_coords_to_directions(grid_coords: torch.Tensor) -> torch.Tensor:
+    """Converts grid coordinates in [-1, 1]^2 to unit directions using equirectangular projection."""
+    u, v = grid_coords.unbind(dim=-1)
+    azimuth = u * math.pi
+    elevation = v * (0.5 * math.pi)
+    sin_azimuth = torch.sin(azimuth)
+    cos_azimuth = torch.cos(azimuth)
+    sin_elevation = torch.sin(elevation)
+    cos_elevation = torch.cos(elevation)
+    return torch.stack([cos_elevation * sin_azimuth, sin_elevation, cos_elevation * cos_azimuth], dim=-1)

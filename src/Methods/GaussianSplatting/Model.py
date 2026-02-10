@@ -1,18 +1,18 @@
-# -- coding: utf-8 --
-
 """GaussianSplatting/Model.py: Implementation of the model for 3D Gaussian Splatting."""
 
 import torch
-from Thirdparty.SimpleKNN import distCUDA2
+import numpy as np
 
 import Framework
 from Datasets.utils import BasicPointCloud
 from Logging import Logger
 from Methods.Base.Model import BaseModel
 from Cameras.utils import quaternion_to_rotation_matrix
-from Methods.GaussianSplatting.utils import inverse_sigmoid, LRDecayPolicy, rgb_to_sh0, extract_upper_triangular_matrix, build_covariances
+from Methods.GaussianSplatting.utils import rgb_to_sh0, extract_upper_triangular_matrix, build_covariances
 from CudaUtils.MortonEncoding import morton_encode
-from Optim.AdamUtils import replace_param_group_data, prune_param_groups, extend_param_groups
+from Optim.adam_utils import replace_param_group_data, prune_param_groups, extend_param_groups
+from Optim.lr_utils import LRDecayPolicy
+from Optim.knn_utils import compute_root_mean_squared_knn_distances
 
 
 class Gaussians(torch.nn.Module):
@@ -37,8 +37,8 @@ class Gaussians(torch.nn.Module):
         # activation functions
         self.scaling_activation = torch.nn.Identity() if pretrained else torch.exp
         self.inverse_scaling_activation = torch.nn.Identity() if pretrained else torch.log
-        self.opacity_activation = torch.nn.Identity() if pretrained else torch.sigmoid
-        self.inverse_opacity_activation = torch.nn.Identity() if pretrained else inverse_sigmoid
+        self.opacity_activation = torch.nn.Identity() if pretrained else torch.special.expit
+        self.inverse_opacity_activation = torch.nn.Identity() if pretrained else torch.special.logit
         self.rotation_activation = torch.nn.Identity() if pretrained else torch.nn.functional.normalize
         self.covariance_activation = build_covariances
 
@@ -58,11 +58,19 @@ class Gaussians(torch.nn.Module):
         return self._positions
 
     @property
+    def get_features_dc(self) -> torch.Tensor:
+        """Returns the Gaussians' SH features for degree 0."""
+        return self._features_dc
+
+    @property
+    def get_features_rest(self) -> torch.Tensor:
+        """Returns the Gaussians' SH features for degrees > 0."""
+        return self._features_rest
+
+    @property
     def get_features(self) -> torch.Tensor:
         """Returns the Gaussians' concatenated SH features."""
-        features_dc = self._features_dc
-        features_rest = self._features_rest
-        return torch.cat((features_dc, features_rest), dim=1)
+        return torch.cat([self._features_dc, self._features_rest], dim=1)
 
     @property
     def get_opacities(self) -> torch.Tensor:
@@ -92,10 +100,10 @@ class Gaussians(torch.nn.Module):
         features = torch.zeros((n_initial_points, 3, (self.max_sh_degree + 1) ** 2), dtype=torch.float32, device='cuda')
         features[:, :3, 0] = rgb_to_sh0(rgbs)
 
-        Logger.logInfo(f'Number of points at initialization: {n_initial_points:,}')
+        Logger.log_info(f'Number of points at initialization: {n_initial_points:,}')
 
-        dist2 = distCUDA2(positions).clamp_min(0.0000001)
-        scales = self.inverse_scaling_activation(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        distances = compute_root_mean_squared_knn_distances(positions)
+        scales = self.inverse_scaling_activation(distances)[..., None].repeat(1, 3)
         rotations = torch.zeros((n_initial_points, 4), device='cuda')
         rotations[:, 0] = 1
 
@@ -132,7 +140,6 @@ class Gaussians(torch.nn.Module):
         self.position_lr_scheduler = LRDecayPolicy(
             lr_init=training_wrapper.LEARNING_RATE_POSITION_INIT * self.training_cameras_extent,
             lr_final=training_wrapper.LEARNING_RATE_POSITION_FINAL * self.training_cameras_extent,
-            lr_delay_mult=training_wrapper.LEARNING_RATE_POSITION_DELAY_MULT,
             max_steps=training_wrapper.LEARNING_RATE_POSITION_MAX_STEPS)
 
     def update_learning_rate(self, iteration: int) -> None:
@@ -276,6 +283,39 @@ class Gaussians(torch.nn.Module):
         # bake covariances
         self._baked_covariances = torch.nn.Parameter(self.get_covariances(1.0), requires_grad=False)
 
+    @torch.no_grad()
+    def as_ply_dict(self) -> dict[str, np.ndarray]:
+        """Returns the model as a ply-compatible dictionary using structured numpy arrays."""
+        if self.get_positions.shape[0] == 0:
+            return {}
+
+        # construct attributes
+        positions = self.get_positions.detach().contiguous().cpu().numpy()
+        sh_0 = self.get_features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        sh_rest = self.get_features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = self.get_opacities.logit().detach().contiguous().cpu().numpy()  # most viewers expect unactivated opacities
+        scales = self.get_scales.log().detach().contiguous().cpu().numpy()  # most viewers expect unactivated scales
+        rotations = self.get_rotations.detach().contiguous().cpu().numpy()
+        attributes = np.concatenate((positions, sh_0, sh_rest, opacities, scales, rotations), axis=1)
+
+        # construct structured array
+        attribute_names = (
+              ['x', 'y', 'z']                                    # 3d mean
+            + ['f_dc_0', 'f_dc_1', 'f_dc_2']                     # 0-th SH degree coefficients
+            + [f'f_rest_{i}' for i in range(sh_rest.shape[-1])]  # remaining SH degree coefficients
+            + ['opacity']                                        # opacity (pre-activation)
+            + ['scale_0', 'scale_1', 'scale_2']                  # 3d scale (pre-activation)
+            + ['rot_0', 'rot_1', 'rot_2', 'rot_3']               # rotation quaternion
+        )
+        dtype = 'f4'  # store all attributes as float32 for compatibility
+        full_dtype = [(attribute_name, dtype) for attribute_name in attribute_names]
+        vertices = np.empty(positions.shape[0], dtype=full_dtype)
+
+        # insert attributes into structured array
+        vertices[:] = list(map(tuple, attributes))
+
+        return {'vertex': vertices}
+
 
 @Framework.Configurable.configure(
     SH_DEGREE=3,
@@ -292,3 +332,14 @@ class GaussianSplattingModel(BaseModel):
         pretrained = self.num_iterations_trained > 0
         self.gaussians = Gaussians(self.SH_DEGREE, pretrained)
         return self
+
+    def get_ply_dict(self) -> dict[str, np.ndarray | list[str]]:
+        """Returns the model as a ply-compatible dictionary using structured numpy arrays."""
+        data: dict[str, np.ndarray | list[str]] = {}
+        if self.gaussians is None or not (data := self.gaussians.as_ply_dict()):
+            return data
+
+        # add method-specific comments
+        data['comments'] = ['SplatRenderMode: default', 'Generated with NeRFICG/GaussianSplatting']
+
+        return data

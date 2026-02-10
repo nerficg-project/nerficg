@@ -1,18 +1,16 @@
-# -- coding: utf-8 --
 """Framework.py: Contains all functions that are part of the framework's default setup process."""
 
-__author__ = 'Moritz Kappel and Florian Hahlbohm'
-__credits__ = ['Moritz Kappel', 'Florian Hahlbohm', 'Timon Scholz']
+__author__ = 'Moritz Kappel and Florian Hahlbohm and Timon Scholz'
 __license__ = 'MIT'
-__maintainer__ = 'Moritz Kappel'
-__email__ = 'kappel@cg.cs.tu-bs.de'
+__maintainer__ = 'Florian Hahlbohm'
+__email__ = 'hahlbohm@cg.cs.tu-bs.de'
 __status__ = 'Development'
 
 development_versions: dict[str, str] = {
-    'python': '3.11.8',
-    'pytorch': '2.5.1',
-    'cuda': '11.8',
-    'cudnn': '90100'
+    'python': '3.11.14',
+    'pytorch': '2.8.0',
+    'cuda': '12.8',
+    'cudnn': '91002'
 }
 
 import ast
@@ -25,7 +23,9 @@ from multiprocessing import set_start_method
 from pathlib import Path
 import yaml
 from munch import Munch
-from typing import Any, Type, TypeVar
+from typing import Any, Callable, Type, TypeVar, ParamSpec
+import traceback
+from functools import wraps
 
 import numpy as np
 import torch
@@ -38,7 +38,7 @@ T = TypeVar("T")
 
 class ConfigParameterList(Munch):
 
-    def recursiveUpdate(self, other: 'ConfigParameterList'):
+    def recursive_update(self, other: 'ConfigParameterList'):
         # check type
         if not isinstance(other, ConfigParameterList):
             raise TypeError()
@@ -47,7 +47,7 @@ class ConfigParameterList(Munch):
         # recursively update sublists
         for key, value in [(i, other[i]) for i in other]:
             if isinstance(value, ConfigParameterList) and hasattr(self, key) and isinstance(self[key], ConfigParameterList):
-                self[key].recursiveUpdate(value)
+                self[key].recursive_update(value)
                 del other[key]
         # update remaining contents
         self.update(other)
@@ -60,10 +60,10 @@ class ConfigWrapper(ConfigParameterList):
         try:
             return super().__getattr__(item)
         except AttributeError:
-            default_global = getDefaultGlobalConfig()
+            default_global = get_default_global_config()
             if item in default_global.__dict__:
                 if item not in self._warned:
-                    Logger.logWarning(f'Parameter missing in loaded config: GLOBAL.{item}')
+                    Logger.log_warning(f'Parameter missing in loaded config: GLOBAL.{item}')
                     self._warned.add(item)
                 return default_global.__getattr__(item)
 
@@ -80,29 +80,41 @@ class Configurable:
         instance_params = self.__class__._configuration.copy()
         # overwrite from config file
         if not hasattr(config, self.config_file_data_field):
-            Logger.logWarning(f'data field {self.config_file_data_field} requested by class {self.__class__.__name__} is not available in config file. \
+            Logger.log_warning(f'data field {self.config_file_data_field} requested by class {self.__class__.__name__} is not available in config file. \
                               Using default config.')
         else:
-            instance_params.recursiveUpdate(config[self.config_file_data_field])
+            instance_params.recursive_update(config[self.config_file_data_field])
         # assign to instance
         for param in instance_params:
             self.__dict__[param] = instance_params[param]
 
     @classmethod
-    def getDefaultParameters(cls):
+    def get_default_parameters(cls):
         return cls._configuration
 
     @staticmethod
     def configure(**params):
-        newParams = ConfigParameterList(params)
+        new_params = ConfigParameterList(params)
 
-        def configDecorator(cls: Type[T]) -> Type[T]:
+        def config_decorator(cls: Type[T]) -> Type[T]:
             if not issubclass(cls, Configurable):
                 raise FrameworkError(f'configure decorator must be applied to subclass of Configurable, but got {cls.__class__}')
-            cls._configuration = cls._configuration.copy()
-            cls._configuration.recursiveUpdate(newParams)
+            cls._configuration = ConfigParameterList()
+            for base in cls.__bases__:
+                if issubclass(base, Configurable):
+                    cls._configuration.recursive_update(base._configuration)
+            cls._configuration.recursive_update(new_params)
             return cls
-        return configDecorator
+        return config_decorator
+
+
+class Directories:
+    NERFICG_ROOT: Path = Path(__file__).resolve().parent.parent
+    ICGUI_ROOT: Path = NERFICG_ROOT / 'src' / 'ICGui'
+    CACHE_DIR: Path = NERFICG_ROOT / '.cache'
+    CONFIG_DIR: Path = NERFICG_ROOT / 'configs'
+    OUTPUT_DIR: Path = NERFICG_ROOT / 'output'
+    SRC_DIR: Path = NERFICG_ROOT / 'src'
 
 
 def setup(require_custom_config: bool = False, config_path: str | None = None) -> list[str] | None:
@@ -111,13 +123,13 @@ def setup(require_custom_config: bool = False, config_path: str | None = None) -
     try:
         set_start_method('spawn')
     except RuntimeError:
-        Logger.logWarning('multiprocessing start method already set')
+        Logger.log_warning('multiprocessing start method already set')
     # parse arguments and load config
     config_args: dict[str, str] = {}
     unknown_args = None
     if config_path is None:
         # parse arguments to retrieve config file location
-        parser: ArgumentParser = ArgumentParser(prog='Framework', add_help=False)
+        parser = ArgumentParser(prog='Framework', add_help=False)
         parser.add_argument(
             '-c', '--config', action='store', dest='config_path', default=None,
             metavar='path/to/config_file.yaml', required=False, nargs='*',
@@ -126,7 +138,7 @@ def setup(require_custom_config: bool = False, config_path: str | None = None) -
         args, unknown_args = parser.parse_known_args()
         if args.config_path is not None:
             # parse extra args overwriting values in config (for wandb sweeps)
-            config_path: str = args.config_path[0]
+            config_path = Path(args.config_path[0]).absolute()
             config_args: dict[str, str] = {}
             for config_arg in args.config_path[1:]:
                 try:
@@ -135,38 +147,38 @@ def setup(require_custom_config: bool = False, config_path: str | None = None) -
                 except ValueError:
                     raise FrameworkError(f'invalid config overwrite argument syntax: "{config_arg}" (expected syntax: config_key=config_value).')
 
-    # initialize config and
-    loadConfig(config_path, require_custom_config, config_args)
+    # initialize config
+    load_config(config_path, require_custom_config, config_args)
     # filter warnings
     if config.GLOBAL.FILTER_WARNINGS:
         warnings.filterwarnings('ignore')
     # call init methods
-    checkLibraryVersions()
-    setupTorch()
-    setRandomSeed()
+    check_library_versions()
+    setup_torch()
+    set_random_seed()
     # return unused arguments to application
     return unknown_args
 
 
-def loadConfig(config_path, require_custom_config, config_args) -> None:
+def load_config(config_path: Path, require_custom_config: bool, config_args: dict[str, str]) -> None:
     """Loads project configuration from .yaml file."""
     global config
-    Logger.setMode(Logger.MODE_VERBOSE)
+    Logger.set_mode(Logger.MODE_VERBOSE)
     if config_path is not None:
         try:
-            yaml_dict: dict[str, Any] = yaml.unsafe_load(open(config_path))
+            yaml_dict: dict[str, Any] = yaml.safe_load(open(config_path))
             config = ConfigWrapper.fromDict(yaml_dict)
-            Logger.setMode(config.GLOBAL.LOG_LEVEL)
+            Logger.set_mode(config.GLOBAL.LOG_LEVEL)
             Logger.log(f'configuration file loaded: {config_path}')
-            Logger.logDebug(config)
-            config._path = os.path.abspath(config_path)
+            Logger.log_debug(config)
+            config.path = config_path
         except IOError:
             raise FrameworkError(f'invalid config file path: "{config_path}"')
     else:
         if require_custom_config:
             raise FrameworkError('missing config file, please provide a config file path using the "-c / --config" argument.')
-        config = ConfigWrapper(GLOBAL=getDefaultGlobalConfig())
-        Logger.setMode(config.GLOBAL.LOG_LEVEL)
+        config = ConfigWrapper(GLOBAL=get_default_global_config())
+        Logger.set_mode(config.GLOBAL.LOG_LEVEL)
         Logger.log('using default configuration')
 
     # override single config elements from command line arguments
@@ -187,12 +199,12 @@ def loadConfig(config_path, require_custom_config, config_args) -> None:
         setattr(target_munch, param_name, value)
 
 
-def getDefaultGlobalConfig() -> ConfigParameterList:
+def get_default_global_config() -> ConfigParameterList:
     """Returns the default values of all global configuration parameters."""
     return ConfigParameterList(
         LOG_LEVEL=Logger.MODE_VERBOSE,
         GPU_INDICES=[0],
-        RANDOM_SEED=1618033989,
+        RANDOM_SEED=0,
         ANOMALY_DETECTION=False,
         FILTER_WARNINGS=True,
         METHOD_TYPE=None,
@@ -200,39 +212,39 @@ def getDefaultGlobalConfig() -> ConfigParameterList:
     )
 
 
-def checkLibraryVersions() -> None:
-    """Print icurrent library versions and add them to global config."""
+def check_library_versions() -> None:
+    """Print current library versions and add them to global config."""
 
-    def printVersion(lib: str, version: str) -> None:
+    def print_version(lib: str, version: str) -> None:
         tested_version = development_versions[lib.lower()] if lib.lower() in development_versions else None
         if version != tested_version:
-            Logger.logWarning(f'current {lib} version: {version} (tested with {tested_version})')
+            Logger.log_warning(f'current {lib} version: {version} (tested with {tested_version})')
         else:
-            Logger.logInfo(f'current {lib} version: {version}')
+            Logger.log_info(f'current {lib} version: {version}')
 
     # python
     config.GLOBAL.PYTHON_VERSION = platform.python_version()
-    printVersion('Python', config.GLOBAL.PYTHON_VERSION)
+    print_version('Python', config.GLOBAL.PYTHON_VERSION)
 
     # pytorch
     config.GLOBAL.TORCH_VERSION = torch.__version__.split('+')[0]
-    printVersion('Pytorch', config.GLOBAL.TORCH_VERSION)
+    print_version('Pytorch', config.GLOBAL.TORCH_VERSION)
 
     # cuda
     config.GLOBAL.CUDA_VERSION = torch.version.cuda
-    printVersion('CUDA', config.GLOBAL.CUDA_VERSION)
+    print_version('CUDA', config.GLOBAL.CUDA_VERSION)
 
     # cudnn
     config.GLOBAL.CUDNN_VERSION = str(torch.backends.cudnn.version())
-    printVersion('CUDNN', config.GLOBAL.CUDNN_VERSION)
+    print_version('CUDNN', config.GLOBAL.CUDNN_VERSION)
 
 
-def setRandomSeed() -> None:
+def set_random_seed() -> None:
     """Gets or sets the random seed for reproducibility (check https://pytorch.org/docs/stable/notes/randomness.html)"""
     # use a random seed if provided by config file
     if config.GLOBAL.RANDOM_SEED is None:
         config.GLOBAL.RANDOM_SEED = np.random.randint(0, 4294967295)
-    Logger.logInfo(f'deterministic mode enabled using random seed: {config.GLOBAL.RANDOM_SEED}')
+    Logger.log_info(f'deterministic mode enabled using random seed: {config.GLOBAL.RANDOM_SEED}')
     torch.manual_seed(config.GLOBAL.RANDOM_SEED)
     random.seed(config.GLOBAL.RANDOM_SEED)
     np.random.seed(config.GLOBAL.RANDOM_SEED)  # legacy
@@ -240,33 +252,31 @@ def setRandomSeed() -> None:
     # torch.backends.cudnn.benchmark = False  # decreases performance
 
 
-def setupTorch() -> None:
+def setup_torch() -> None:
     """Initializes PyTorch by setting the default tensor type, GPU device and misc flags."""
-    # cache directory for torch checkpoints etc.
-    cache_path = Path(__file__).parents[1] / '.cache'
     # set torch hub cache directory
-    torch.hub.set_dir(str(cache_path))
+    torch.hub.set_dir(str(Directories.CACHE_DIR))
     # set default torch extension path
-    os.environ['TORCH_EXTENSIONS_DIR'] = str(cache_path / 'Extensions')
-    Logger.logInfo('initializing pytorch runtime')
+    os.environ['TORCH_EXTENSIONS_DIR'] = str(Directories.CACHE_DIR / 'Extensions')
+    Logger.log_info('initializing pytorch runtime')
 
     if config.GLOBAL.GPU_INDICES is None:
-        Logger.logInfo('No GPU indices specified: entering CPU mode')
+        Logger.log_info('No GPU indices specified: entering CPU mode')
         config.GLOBAL.DEFAULT_DEVICE = torch.device('cpu')
     else:
         if torch.cuda.is_available():
-            Logger.logInfo('entering GPU mode')
+            Logger.log_info('entering GPU mode')
             valid_indices: list[int] = [i for i in config.GLOBAL.GPU_INDICES if i in range(torch.cuda.device_count())]
             for item in [i for i in config.GLOBAL.GPU_INDICES if i not in valid_indices]:
-                Logger.logWarning(f'requested GPU index {item} not available on this machine')
+                Logger.log_warning(f'requested GPU index {item} not available on this machine')
             config.GLOBAL.GPU_INDICES = valid_indices
-            Logger.logInfo(f'using GPU(s): {str(config.GLOBAL.GPU_INDICES).replace(",", " (main),", 1)}')
+            Logger.log_info(f'using GPU(s): {str(config.GLOBAL.GPU_INDICES).replace(",", " (main),", 1)}')
             config.GLOBAL.DEFAULT_DEVICE = torch.device(f'cuda:{config.GLOBAL.GPU_INDICES[0]}')
             torch.cuda.set_device(config.GLOBAL.DEFAULT_DEVICE)
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.fastest = True
         else:
-            Logger.logWarning(
+            Logger.log_warning(
                 f'GPU indices {config.GLOBAL.GPU_INDICES } requested but not supported by the machine: switching to CPU mode'
             )
             config.GLOBAL.DEFAULT_DEVICE = torch.device('cpu')
@@ -278,21 +288,21 @@ def setupTorch() -> None:
     return
 
 
-def setupWandb(project: str, entity: str, name: str) -> bool:
+def setup_wandb(project: str, entity: str, name: str) -> bool:
     """Sets up wandb for training visualization."""
     try:
         global wandb
         import wandb
-        Logger.logInfo('setting up wandb')
+        Logger.log_info('setting up wandb')
         # os.environ["WANDB_CONSOLE"] = "off"
         os.environ["WANDB_SILENT"] = "true"
-        log_path = Path(__file__).resolve().parents[1] / 'output'
+        log_path = Directories.OUTPUT_DIR
         log_path.mkdir(parents=True, exist_ok=True)
         wandb.init(project=project, entity=entity, name=name, config=config.toDict(),
                    dir=str(log_path))
-        Logger.logInfo(f'wandb logs will be available at: {wandb.run.url}')
+        Logger.log_info(f'wandb logs will be available at: {wandb.run.url}')
     except ModuleNotFoundError:
-        Logger.logWarning('wandb module not found: cannot log training details')
+        Logger.log_warning('wandb module not found: cannot log training details')
         config.TRAINING.WANDB.ACTIVATE = False
         return False
     return True
@@ -307,7 +317,43 @@ def teardown():
         del config
     # torch.cuda.synchronize()
     # torch.cuda.empty_cache()
-    Logger.logInfo('framework teardown complete')
+    Logger.log_info('framework teardown complete')
+
+
+# decorators
+Param = ParamSpec("Param")
+RetType = TypeVar("RetType")
+
+def catch(cleanup: Callable[[], None] | Callable[[Any], None] | None = None, *,
+          is_method: bool = False) -> Callable[[Callable[Param, RetType]], Callable[Param, RetType]]:
+    last_exception: dict[str, str | None] = {'traceback': None}
+
+    def catch_decorator(function: Callable[Param, RetType]) -> Callable[Param, RetType]:
+        @wraps(function)
+        def wrapper(*args: Param.args, **kwargs: Param.kwargs) -> RetType:
+            retval = None
+            try:
+                retval = function(*args, **kwargs)
+                last_exception['traceback'] = None  # Reset traceback on successful execution
+            except Exception as e:
+                # Re-raise KeyboardInterrupt to allow graceful shutdown
+                if isinstance(e, KeyboardInterrupt):
+                    raise e
+
+                # Log the caught exception traceback if it has changed
+                tb = traceback.format_exc()
+                if tb != last_exception['traceback']:
+                    last_exception['traceback'] = tb
+                    Logger.log_error(f'Caught exception in {function.__name__}:\n{tb}')
+            finally:
+                if cleanup is not None:
+                    if is_method:
+                        cleanup(args[0])
+                    else:
+                        cleanup()
+            return retval
+        return wrapper
+    return catch_decorator
 
 
 # custom exceptions
@@ -315,7 +361,7 @@ class FrameworkError(Exception):
     """A generic exception class for errors that occur within this framework."""
     def __init__(self, msg):
         super().__init__(msg)
-        Logger.logError(f'({self.__class__.__name__}) {msg}')
+        Logger.log_error(f'({self.__class__.__name__}) {msg}')
 
 
 class MethodError(FrameworkError):
@@ -347,11 +393,11 @@ class CameraError(FrameworkError):
 
 
 class DatasetError(FrameworkError):
-    """Error loadding or processing a dataset."""
+    """Error loading or processing a dataset."""
 
 
 class LossError(FrameworkError):
-    """An error occuring during loss definition or calculation."""
+    """An error occurring during loss definition or calculation."""
 
 
 class SamplerError(FrameworkError):
@@ -367,14 +413,16 @@ class GUIError(FrameworkError):
 
 
 class ExtensionError(FrameworkError):
-    """Failed to load a third party or custom CUDA extension."""
+    """Failed to load a third-party or custom CUDA extension."""
 
     def __init__(self, name: str, install_command: str | list[str]) -> None:
         global config
         self.__extension_name__ = name
         self.__install_command__ = install_command
-        msg = (f'Dependency "{name}" not found.\n'
-               f'\tInstall the extension using "{install_command if isinstance(install_command, str) else " ".join(install_command)}",\n'
-               f'\tor use "./scripts/install.py -m {config.GLOBAL.METHOD_TYPE}" to automatically install all dependencies of method "{config.GLOBAL.METHOD_TYPE}".'
-               if 'config' in globals() and config.GLOBAL.METHOD_TYPE is not None else '')
+        msg = (
+            f'Dependency "{name}" not found.\n'
+            f'\tInstall the extension using "{install_command if isinstance(install_command, str) else " ".join(install_command)}",\n'
+            f'\tor use "./scripts/install.py -m {config.GLOBAL.METHOD_TYPE}" to automatically install all dependencies of method "{config.GLOBAL.METHOD_TYPE}".'
+            if 'config' in globals() and config.GLOBAL.METHOD_TYPE is not None else ''
+        )
         Exception.__init__(self, msg)

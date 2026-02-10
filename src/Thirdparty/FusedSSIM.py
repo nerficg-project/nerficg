@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Thirdparty/FusedSSIM.py: fast cuda ssim implementation from https://github.com/rahul-goel/fused-ssim.
 """
@@ -10,6 +8,7 @@ __extension_name__ = 'FusedSSIM'
 __install_command__ = [
     'pip', 'install',
     'git+https://github.com/rahul-goel/fused-ssim/',
+    '--no-build-isolation',
 ]
 
 try:

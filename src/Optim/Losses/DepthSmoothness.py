@@ -1,6 +1,7 @@
-# -- coding: utf-8 --
-
-"""Optim/DepthSmoothness.py: smooth depth loss. adapted from https://kornia.readthedocs.io/en/v0.2.1/_modules/kornia/losses/depth_smooth.html."""
+"""
+Losses/DepthSmoothness.py: Smooth depth loss.
+Adapted from https://kornia.readthedocs.io/en/v0.2.1/_modules/kornia/losses/depth_smooth.html.
+"""
 
 import torch
 
@@ -27,23 +28,16 @@ def _laplace_y(img: torch.Tensor) -> torch.Tensor:
     return le + ri - (2 * mi)
 
 
-def depthSmoothnessLoss(
-        depth: torch.Tensor,
-        image: torch.Tensor) -> torch.Tensor:
-
+def depth_smoothness_loss(depth: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
     # compute the gradients
-    idepth_dx: torch.Tensor = _laplace_x(depth)
-    idepth_dy: torch.Tensor = _laplace_y(depth)
-    image_dx: torch.Tensor = _gradient_x(image)
-    image_dy: torch.Tensor = _gradient_y(image)
-
+    idepth_dx = _laplace_x(depth)
+    idepth_dy = _laplace_y(depth)
+    image_dx = _gradient_x(image)
+    image_dy = _gradient_y(image)
     # compute image weights
-    weights_x: torch.Tensor = torch.exp(
-        -torch.mean(torch.abs(image_dx), dim=1, keepdim=True))
-    weights_y: torch.Tensor = torch.exp(
-        -torch.mean(torch.abs(image_dy), dim=1, keepdim=True))
-
+    weights_x = torch.exp(-torch.mean(image_dx.abs(), dim=1, keepdim=True))
+    weights_y = torch.exp(-torch.mean(image_dy.abs(), dim=1, keepdim=True))
     # apply image weights to depth
-    smoothness_x: torch.Tensor = torch.abs(idepth_dx * weights_x)
-    smoothness_y: torch.Tensor = torch.abs(idepth_dy * weights_y)
-    return torch.mean(smoothness_x) + torch.mean(smoothness_y)
+    smoothness_x = (idepth_dx * weights_x).abs()
+    smoothness_y = (idepth_dy * weights_y).abs()
+    return smoothness_x.mean() + smoothness_y.mean()

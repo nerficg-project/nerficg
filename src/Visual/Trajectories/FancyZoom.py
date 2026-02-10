@@ -1,53 +1,71 @@
-# -- coding: utf-8 --
+"""Visual/Trajectories/FancyZoom.py: A trajectory following a set of reference views interrupted by zooming and lemniscate trajectories."""
 
-"""Visual/Trajectories/FancyZoom.py: A camera trajectory following the training poses, interrupted by zooms and spiral movements."""
+from copy import deepcopy
 
-import math
-import torch
+import numpy as np
 
-import Framework
 from Cameras.Base import BaseCamera
-from Cameras.utils import CameraProperties
-from Visual.Trajectories.utils import getLemniscateTrajectory, CameraTrajectory
+from Cameras.Perspective import PerspectiveCamera
+from Datasets.utils import View
+from Visual.Trajectories.utils import get_lemniscate_trajectory, CameraTrajectory
 
 
 class fancy_zoom(CameraTrajectory):
-    """A camera trajectory following the training poses, interrupted by zooms and spiral movements."""
+    """A trajectory following a set of reference views interrupted by zooming and lemniscate trajectories."""
 
-    def __init__(self, num_breaks: int = 2, num_zoom_frames: int = 90, zoom_factor: float = 0.2, lemni_frames_per_rot: int = 60, lemni_degree: int = 3) -> None:
+    def __init__(
+        self,
+        n_breaks: int = 2,
+        zoom_n_views: int = 90,
+        zoom_factor: float = 0.2,
+        lemniscate_n_views_per_rotation: int = 60,
+        lemniscate_degree: int = 3,
+    ) -> None:
         super().__init__()
-        self.num_breaks = num_breaks
-        self.num_zoom_frames = num_zoom_frames
+        self.n_breaks = n_breaks
+        self.zoom_n_views = zoom_n_views
         self.zoom_factor = zoom_factor
-        self.lemni_frames_per_rot = lemni_frames_per_rot
-        self.lemni_degree = lemni_degree
+        self.lemniscate_n_views_per_rotation = lemniscate_n_views_per_rotation
+        self.lemniscate_degree = lemniscate_degree
 
-    def _generate(self, reference_camera: BaseCamera, reference_poses: list[CameraProperties]) -> list[CameraProperties]:
-        """Generates the camera trajectory using a list of reference poses."""
-        data: list[CameraProperties] = []
-        num_reference_frames = len(reference_poses)
-        break_indices = torch.linspace(0, len(reference_poses), self.num_breaks + 2)[1:-1].int().tolist()
-        for i in range(break_indices[0]):
-            data.append(reference_poses[i].toSimple())
-        for j in range(len(break_indices)):
-            reference = reference_poses[break_indices[j]]
-            for i in range(self.num_zoom_frames):
-                new = reference.toSimple()
-                new.focal_x = new.focal_x + (new.focal_x * self.zoom_factor * math.sin((i / (self.num_zoom_frames - 1)) * 2 * math.pi))
-                new.focal_y = new.focal_y + (new.focal_y * self.zoom_factor * math.sin((i / (self.num_zoom_frames - 1)) * 2 * math.pi))
-                data.append(new)
-            reference_camera.setProperties(reference)
-            pos_viewdir = reference_camera.getPositionAndViewdir()[..., :3]
-            lookat = (pos_viewdir[0] + (((reference_camera.near_plane + reference_camera.far_plane) / 2) * pos_viewdir[1])).to(Framework.config.GLOBAL.DEFAULT_DEVICE)
-            up = reference_camera.getUpVector().to(Framework.config.GLOBAL.DEFAULT_DEVICE)
-            lemniscate_trajectory_c2ws = getLemniscateTrajectory(reference, lookat=lookat, up=up, num_frames=self.lemni_frames_per_rot, degree=self.lemni_degree)
-            for i in lemniscate_trajectory_c2ws:
-                new = reference.toSimple()
-                new.c2w = i
-                data.append(new)
-            if j < len(break_indices) - 1:
-                for i in range(break_indices[j], break_indices[j + 1]):
-                    data.append(reference_poses[i].toSimple())
-        for i in range(break_indices[-1], num_reference_frames):
-            data.append(reference_poses[i].toSimple())
-        return data
+    def _generate(self, reference_camera: BaseCamera, reference_views: list[View]) -> list[View]:
+        """A trajectory following a set of reference views interrupted by zooming and lemniscate trajectories."""
+        break_indices = np.rint(np.linspace(0, len(reference_views) - 1, self.n_breaks + 2)).astype(np.intp)[1:-1]
+        views = []
+        for view in reference_views[:break_indices[0]]:
+            views.append(view.to_simple())
+        for break_idx in range(self.n_breaks):
+            break_view_idx = break_indices[break_idx]
+            break_view = reference_views[break_view_idx]
+            # zoom in and out
+            for zoom_frame_idx in range(self.zoom_n_views):
+                focal_scale = 1 + self.zoom_factor * np.sin(zoom_frame_idx / (self.zoom_n_views - 1) * 2 * np.pi)
+                camera = PerspectiveCamera(
+                    shared_settings=break_view.camera.shared_settings,
+                    width=break_view.camera.width, height=break_view.camera.height,
+                    focal_x=break_view.camera.focal_x * focal_scale, focal_y=break_view.camera.focal_y * focal_scale,
+                    center_x=break_view.camera.center_x, center_y=break_view.camera.center_y,
+                    distortion=deepcopy(break_view.camera.distortion),
+                )
+                break_view_zoomed = break_view.to_simple()
+                break_view_zoomed.camera = camera
+                views.append(break_view_zoomed)
+            # lemniscate trajectory
+            lookat = break_view.position_numpy + (break_view.camera.near_plane + break_view.camera.far_plane) / 2 * break_view.forward_numpy
+            up = break_view.up_numpy
+            lemniscate_trajectory_poses = get_lemniscate_trajectory(
+                break_view, lookat, up, self.lemniscate_n_views_per_rotation, self.lemniscate_degree
+            )
+            for pose in lemniscate_trajectory_poses:
+                view = break_view.to_simple()
+                view.c2w = pose
+                views.append(view)
+            # if this is not the last break, add views until the next break
+            if break_idx < self.n_breaks - 1:
+                start = break_view_idx + 1
+                stop = break_indices[break_idx + 1]
+                for view in reference_views[start:stop]:
+                    views.append(view.to_simple())
+        for view in reference_views[break_indices[-1]:]:
+            views.append(view.to_simple())
+        return views

@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-# -- coding: utf-8 --
 
 """colmap.py: Calibrates a given input image sequence using colmap."""
 
@@ -7,26 +6,26 @@ import shutil
 import subprocess
 from argparse import ArgumentParser
 from pathlib import Path
+
 import torch
 
+from cutie import main as run_cutie
+from raft import main as run_raft
+from monocular_depth import main as run_monocular_depth
+
 import utils
-
-from cutie import main as runCutie
-from raft import main as runRAFT
-from monocularDepth import main as runMonocularDepth
-
-with utils.discoverSourcePath():
+with utils.DiscoverSourcePath():
     import Framework
     from Logging import Logger
 
 
-def downloadVocabTree() -> Path | None:
+def download_vocab_tree() -> Path | None:
     # download vocab tree binary
-    cache_path: Path = Path(__file__).resolve().parents[1] / '.cache'
+    cache_path: Path = Framework.Directories.CACHE_DIR
     file_name: str = 'vocab_tree_flickr100K_words32K.bin'
     cache_path.mkdir(exist_ok=True)
     if not (cache_path / file_name).exists():
-        Logger.logInfo('Downloading vocab tree binary...')
+        Logger.log_info('Downloading vocab tree binary...')
         command: list[str] = [
             'wget',
             '-O', str(cache_path / file_name),
@@ -37,67 +36,68 @@ def downloadVocabTree() -> Path | None:
     return cache_path / file_name
 
 
-def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher: bool, use_masks: bool,
+def main(*, base_path: Path, use_cpu: bool, camera_mode: str, camera_model: str, vocab_tree_matcher: bool, use_masks: bool,
          undistort: bool, generate_annotations: bool, align: bool) -> bool:
-    Logger.logInfo(f'Running colmap calibration for sequence "{base_path.name}"...')
+    Logger.log_info(f'Running colmap calibration for sequence "{base_path.name}"...')
     # check input directory
     if not base_path.exists():
-        Logger.logError(f'Input directory "{base_path}" does not exist.')
+        Logger.log_error(f'Input directory "{base_path}" does not exist.')
         return False
     images_path: Path = base_path / 'images'
     flow_path: Path = base_path / 'flow'
     mask_path = base_path / 'sfm_masks'
     depth_path = base_path / 'monoc_depth'
     if not images_path.exists():
-        Logger.logError('Input directory does not contain an "images" directory.')
+        Logger.log_error('Input directory does not contain an "images" directory.')
         return False
 
     # check if gpu is available
     if not use_cpu and not torch.cuda.is_available():
-        Logger.logWarning('No GPU detected, running on CPU.')
+        Logger.log_warning('No GPU detected, running on CPU.')
         use_cpu = True
 
     # run colmap feature extraction
-    Logger.logInfo('Running colmap feature extraction...')
+    Logger.log_info('Running colmap feature extraction...')
     command: list[str] = [
         'colmap', 'feature_extractor',
         '--database_path', str(base_path / 'database.db'),
         '--image_path', str(images_path),
         '--ImageReader.single_camera', str(camera_mode == 'single'),
         '--ImageReader.single_camera_per_folder', str(camera_mode == 'single_folder'),
-        '--ImageReader.camera_model', 'OPENCV',
-        '--SiftExtraction.use_gpu', str(not use_cpu),
+        '--ImageReader.single_camera_per_image', str(camera_mode == 'single_image'),
+        '--ImageReader.camera_model', camera_model,
+        '--FeatureExtraction.use_gpu', str(not use_cpu),
     ]
     if use_masks:
         if not mask_path.exists():
-            runCutie(base_path=images_path, output_path=mask_path, recursive=True, colmap_format=True)
+            run_cutie(base_path=images_path, output_path=mask_path, recursive=True, colmap_format=True)
         command += ['--ImageReader.mask_path', str(mask_path)]
     if subprocess.run(command, check=False).returncode != 0:
-        Logger.logError('Error while running colmap feature extraction.')
+        Logger.log_error('Error while running colmap feature extraction.')
         return False
 
     # run colmap feature matching
-    Logger.logInfo('Running colmap feature matching...')
+    Logger.log_info('Running colmap feature matching...')
     if vocab_tree_matcher:
-        Logger.logInfo('Using vocab tree matcher...')
-        vocab_tree_path = downloadVocabTree()
+        Logger.log_info('Using vocab tree matcher...')
+        vocab_tree_path = download_vocab_tree()
         if vocab_tree_path is None:
-            Logger.logError('Error while downloading vocab tree binary.')
+            Logger.log_error('Error while downloading vocab tree binary.')
             return False
     command: list[str] = [
         'colmap', 'exhaustive_matcher' if not vocab_tree_matcher else 'vocab_tree_matcher',
         '--database_path', str(base_path / 'database.db'),
-        '--SiftMatching.use_gpu', str(not use_cpu),
+        '--FeatureMatching.use_gpu', str(not use_cpu),
     ]
     if vocab_tree_matcher:
         command.append('--VocabTreeMatching.vocab_tree_path')
         command.append(str(vocab_tree_path))
     if subprocess.run(command, check=False).returncode != 0:
-        Logger.logError('Error while running colmap feature matching.')
+        Logger.log_error('Error while running colmap feature matching.')
         return False
 
     # run colmap bundle adjustment
-    Logger.logInfo('Running colmap bundle adjustment...')
+    Logger.log_info('Running colmap bundle adjustment...')
     output_path: Path = base_path / 'sparse'
     output_path.mkdir(exist_ok=True)
     command: list[str] = [
@@ -107,14 +107,15 @@ def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher
         '--output_path', str(output_path),
         '--log_level', '1',
         '--Mapper.ba_global_function_tolerance', '0.000001',
+        # '--Mapper.ba_use_gpu', str(not use_cpu),  # COLMAP 3.13.0 has this disabled by default
     ]
     if subprocess.run(command, check=False).returncode != 0:
-        Logger.logError('Error while running colmap bundle adjustment.')
+        Logger.log_error('Error while running colmap bundle adjustment.')
         return False
 
     # run colmap orientation alignment
     if align:
-        Logger.logInfo('Aligning scene orientation...')
+        Logger.log_info('Aligning scene orientation...')
         shutil.move(base_path / 'sparse' / '0', base_path / 'sparse' / '0_unaligned')
         (base_path / 'sparse' / '0').mkdir(exist_ok=True)
         command: list[str] = [
@@ -123,15 +124,15 @@ def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher
             '--input_path', str(base_path / 'sparse' / '0_unaligned'),
             '--output_path', str(base_path / 'sparse' / '0'),
             '--max_image_size', '4000',
-            # '--method', 'IMAGE-ORIENTATION',
+            # '--method', 'IMAGE-ORIENTATION',  # default is MANHATTAN-WORLD
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError('Error while running colmap orientation alignment.')
+            Logger.log_error('Error while running colmap orientation alignment.')
             return False
 
     # undistort images
     if undistort:
-        Logger.logInfo('Undistorting images...')
+        Logger.log_info('Undistorting images...')
         command: list[str] = [
             'colmap', 'image_undistorter',
             '--image_path', str(images_path),
@@ -140,7 +141,7 @@ def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher
             '--output_type', 'COLMAP',
         ]
         if subprocess.run(command, check=False).returncode != 0:
-            Logger.logError('Error while running colmap image undistortion.')
+            Logger.log_error('Error while running colmap image undistortion.')
             return False
 
         shutil.move(images_path, base_path / 'images_distorted')
@@ -153,7 +154,7 @@ def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher
                 shutil.move(p, base_path / (p.name + '_distorted'))
 
     # Generate .ply file
-    Logger.logInfo('Generating PLYs...')
+    Logger.log_info('Generating PLY...')
     sparse_recon_path = base_path / 'sparse' / '0'
     command: list[str] = [
         'colmap', 'model_converter',
@@ -162,28 +163,28 @@ def main(*, base_path: Path, use_cpu: bool, camera_mode: str, vocab_tree_matcher
         '--output_type', 'PLY',
     ]
     if subprocess.run(command, check=False).returncode != 0:
-        Logger.logError('Error converting to ply.')
+        Logger.log_error('Error converting to ply.')
         return False
 
     # Generate additional data
     if generate_annotations:
-        runRAFT(base_path=images_path, output_path=flow_path, recursive=True, backward=True, color=True, model=None)
+        run_raft(base_path=images_path, output_path=flow_path, recursive=True, backward=True, color=True, model=None)
         if not mask_path.exists():
-            runCutie(base_path=images_path, output_path=mask_path, recursive=True, colmap_format=True)
-        runMonocularDepth(base_path=images_path, output_path=depth_path, recursive=True, color=True,
+            run_cutie(base_path=images_path, output_path=mask_path, recursive=True, colmap_format=True)
+        run_monocular_depth(base_path=images_path, output_path=depth_path, recursive=True, color=True,
                           method='DepthAnything', model=None)
-    Logger.logInfo('Done.')
+    Logger.log_info('Done.')
     return True
 
 
 if __name__ == '__main__':
     # init Framework with defaults
     args = Framework.setup()
-    Logger.setMode(Logger.MODE_VERBOSE)
+    Logger.set_mode(Logger.MODE_VERBOSE)
     # parse command line args
-    parser: ArgumentParser = ArgumentParser(
+    parser = ArgumentParser(
         prog='colmap.py',
-        description='Calibrates a given input image sequence using colmap.'
+        description='Calibrates a given input image sequence using COLMAP.'
     )
     parser.add_argument(
         '-i', '--input', action='store', dest='sequence_path',
@@ -195,15 +196,21 @@ if __name__ == '__main__':
         help='Prevents the use of the GPU.'
     )
     parser.add_argument(
-        '--camera_mode', action='store', dest='camera_mode', type=str, default='each',
+        '--camera_mode', action='store', dest='camera_mode', type=str, default='single',
         required=False, choices=['single', 'single_folder', 'single_image'],
         help='How many cameras models to use for calibration. One of "single", "single_folder", "single_image".'
+    )
+    parser.add_argument(
+        '--camera_model', action='store', dest='camera_model', type=str, default='OPENCV',
+        required=False, choices=['SIMPLE_PINHOLE', 'PINHOLE', 'SIMPLE_RADIAL', 'RADIAL', 'OPENCV', 'FULL_OPENCV',
+                                 'SIMPLE_RADIAL_FISHEYE', 'RADIAL_FISHEYE', 'OPENCV_FISHEYE'],
+        help='Specifies the intrinsic camera model. One of "SIMPLE_PINHOLE", "PINHOLE", "SIMPLE_RADIAL", "RADIAL", '
+             '"OPENCV", "FULL_OPENCV", "SIMPLE_RADIAL_FISHEYE", "RADIAL_FISHEYE", "OPENCV_FISHEYE".'
     )
     parser.add_argument(
         '-v', '--vocab_tree_matcher', action='store_true', dest='vocab_tree_matcher',
         help='Use the vocab tree matcher instead of the exhaustive matcher (recommended for n>500 images).'
     )
-
     parser.add_argument(
         '-a', '--annotations', action='store_true', dest='generate_annotations',
         help='Calculates additional annotations (optical flow, monocular depth, binary segmentation) '
@@ -227,6 +234,7 @@ if __name__ == '__main__':
         base_path=Path(args.sequence_path),
         use_cpu=args.use_cpu,
         camera_mode=args.camera_mode,
+        camera_model=args.camera_model,
         vocab_tree_matcher=args.vocab_tree_matcher,
         use_masks=args.use_masks,
         undistort=args.undistort,

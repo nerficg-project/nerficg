@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Visual/Trajectories/Ellipse.py: A camera trajectory for inward-facing captures, following an elliptical path around scene center.
 Adapted from ZipNeRF (https://github.com/jonbarron/camp_zipnerf).
@@ -8,26 +6,37 @@ Adapted from ZipNeRF (https://github.com/jonbarron/camp_zipnerf).
 import numpy as np
 import torch
 
+import Framework
 from Cameras.Base import BaseCamera
-from Cameras.utils import CameraProperties
+from Cameras.Perspective import PerspectiveCamera
+from Datasets.utils import View, compute_scaled_image_size, transform_poses_pca, rescale_poses_to_unit_cube
 from Visual.Trajectories.utils import CameraTrajectory
 
 
 class ellipse_path(CameraTrajectory):
     """A camera trajectory for inward-facing captures, following an elliptical path around scene center."""
 
-    def __init__(self, num_frames: int = 480, resolution: int = None) -> None:
+    def __init__(self, n_views: int = 480, resolution: int = None) -> None:
         super().__init__()
-        self.num_frames = num_frames  # 480 for 60 FPS mipNeRF360 result videos
+        self.n_views = n_views  # 480 for 60 FPS mipNeRF360 result videos
         self.resolution = resolution  # None for original resolution, 720 for 720p, 1080 for 1080p, etc.
 
-    def _generate(self, _: BaseCamera, reference_poses: list[CameraProperties]) -> list[CameraProperties]:
-        """Generates the camera trajectory using a list of reference poses."""
-        data: list[CameraProperties] = []
+    def _generate(self, default_camera: BaseCamera, reference_views: list[View]) -> list[View]:
+        """Generates the camera trajectory using a list of reference views."""
+        camera = PerspectiveCamera(
+            shared_settings=default_camera.shared_settings, width=default_camera.width, height=default_camera.height,
+        )
+        if isinstance(default_camera, PerspectiveCamera):
+            camera.focal_x = default_camera.focal_x
+            camera.focal_y = default_camera.focal_y
+            camera.center_x = default_camera.center_x
+            camera.center_y = default_camera.center_y
+            # TODO: could also copy distortion, but do we want that?
+            # camera.distortion = deepcopy(default_camera.distortion)
         # create ellipse path around the camera positions for mipNeRF360-style videos
         ellipse_path_poses = generate_ellipse_path(
-            poses=torch.stack([pose.c2w for pose in reference_poses]),
-            n_frames=self.num_frames,
+            poses=np.stack([view.c2w_numpy for view in reference_views]),
+            n_views=self.n_views,
             z_variation=0.0,  # How much height variation in render path.
             z_phase=0.0,  # Phase offset for height variation in render path.
             rad_mult_min=1.0,  # How close to get to the object, relative to 1.
@@ -36,41 +45,72 @@ class ellipse_path(CameraTrajectory):
             render_rotate_yaxis=0.0,  # Rotate camera around y-axis.
             lock_up=False,  # If True, locks the up axis (good for sideways paths).
         )
-        width, height, focal_x, focal_y = reference_poses[0].width, reference_poses[0].height, reference_poses[0].focal_x, reference_poses[0].focal_y
         if self.resolution is not None:
-            scale = self.resolution / height
-            width, height, focal_x, focal_y = int(width * scale), int(height * scale), focal_x * scale, focal_y * scale
-        for pose in ellipse_path_poses:
-            pose_4x4 = torch.eye(4)
-            pose_4x4[:3] = pose
-            data.append(CameraProperties(
-                width=width,
-                height=height,
-                rgb=None,
-                alpha=None,
-                c2w=pose_4x4,
-                focal_x=focal_x,
-                focal_y=focal_y,
+            scale = self.resolution / camera.height
+            target_width, target_height = compute_scaled_image_size((camera.width, camera.height), scale)
+            scale_x = target_width / camera.width
+            scale_y = target_height / camera.height
+            camera.width, camera.height = target_width, target_height
+            camera.focal_x *= scale_x
+            camera.focal_y *= scale_y
+            camera.center_x *= scale_x
+            camera.center_y *= scale_y
+        views = []
+        for frame_idx, pose in enumerate(ellipse_path_poses):
+            views.append(View(
+                camera=camera,
+                camera_index=0,
+                frame_idx=frame_idx,
+                global_frame_idx=0,
+                c2w=pose,
             ))
-        return data
+        return views
 
 
 def generate_ellipse_path(
-    poses,
-    n_frames=120,
-    z_variation=0.0,
-    z_phase=0.0,
-    rad_mult_min=1.0,
-    rad_mult_max=1.0,
-    render_rotate_xaxis=0.0,
-    render_rotate_yaxis=0.0,
-    lock_up=False,
-):
+    poses: np.ndarray,
+    n_views: int = 120,
+    z_variation: float = 0.0,
+    z_phase: float = 0.0,
+    rad_mult_min: float = 1.0,
+    rad_mult_max: float = 1.0,
+    render_rotate_xaxis: float = 0.0,
+    render_rotate_yaxis: float = 0.0,
+    lock_up: bool = False,
+) -> np.ndarray:
     """
     Generate an elliptical render path based on the given poses.
-    This function and all sub-functions are adapted from ZipNeRF (https://github.com/jonbarron/camp_zipnerf).
+    This function and all sub-functions are adapted from Zip-NeRF (https://github.com/jonbarron/camp_zipnerf).
     """
-    poses = poses.cpu().numpy()
+    # This function requires rescaled, pca-aligned poses so we need to check what was already applied.
+    # Note: During data loading transform_poses_pca always uses all views, while this function may be called
+    # with only a subset, which usually results in slightly different alignments.
+    needs_pca = not Framework.config.DATASET.get('APPLY_PCA', False)
+    if needs_pca:
+        # Apply PCA alignment without rescaling to unit cube.
+        poses, pca_transform = transform_poses_pca(poses, rescale=False)
+    else:
+        pca_transform = np.eye(4)
+
+    # Convert to OpenGL/NeRF camera coordinate system for direct compatibility with Zip-NeRF utils.
+    colmap2opengl = np.diag([1, -1, -1, 1])
+    poses = poses @ colmap2opengl
+
+    # Unapply the aligned2colmap transformation that is applied in transform_poses_pca.
+    aligned2colmap = np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]]
+    )
+    colmap2aligned = np.linalg.inv(aligned2colmap)
+    poses = colmap2aligned @ poses
+    pca_transform = colmap2aligned @ pca_transform
+
+    needs_pca_rescale = needs_pca or not Framework.config.DATASET.get('APPLY_PCA_RESCALE', False)
+    if needs_pca_rescale:
+        # Rescale to unit cube.
+        poses, pca_transform = rescale_poses_to_unit_cube(poses, pca_transform)
 
     def focus_point_fn(poses):
         """Calculate the nearest point to all focal axes in poses."""
@@ -103,8 +143,6 @@ def generate_ellipse_path(
     xyz_high = np.array([*xy_high, z_high])
 
     def get_positions(theta):
-        # we need to flip theta as nerficg's camera system is left-handed (meaning world space is flipped at this point)
-        theta = -theta
         # Interpolate between bounds with trig functions to get ellipse in x-y.
         # Optionally also interpolate in z to change camera height along path.
         t_x = np.cos(theta) * 0.5 + 0.5
@@ -119,18 +157,18 @@ def generate_ellipse_path(
         positions = center + (positions - center) * rad_mult[:, None]
         return positions
 
-    theta = np.linspace(0, 2.0 * np.pi, n_frames + 1, endpoint=True)
+    theta = np.linspace(0, 2.0 * np.pi, n_views + 1, endpoint=True)
     positions = get_positions(theta)
     # Resample theta angles so that the velocity is closer to constant.
     lengths = np.linalg.norm(positions[1:] - positions[:-1], axis=-1)
-    theta = sample(theta, np.log(lengths), n_frames + 1)
+    theta = sample(theta, np.log(lengths), n_views + 1)
     positions = get_positions(theta)
 
     # Throw away duplicated last position.
     positions = positions[:-1]
 
     # Set path's up vector to axis closest to average of input pose up vectors.
-    avg_up = -poses[:, :3, 1].mean(0)
+    avg_up = poses[:, :3, 1].mean(0)
     avg_up = avg_up / np.linalg.norm(avg_up)
     ind_up = np.argmax(np.abs(avg_up))
     up = np.eye(3)[ind_up] * np.sign(avg_up[ind_up])
@@ -146,20 +184,15 @@ def generate_ellipse_path(
 
         vecs = [None, normalize(up), normalize(lookdir)]
         # x-axis is always the normalized cross product of `lookdir` and `up`.
-        vecs[0] = -orthogonal_dir(vecs[1], vecs[2])
+        vecs[0] = orthogonal_dir(vecs[1], vecs[2])
         # Default is to lock `lookdir` vector, if lock_up is True lock `up` instead.
         ax = 2 if lock_up else 1
         # Set the not-locked axis to be orthogonal to the other two.
-        vecs[ax] = -orthogonal_dir(vecs[(ax + 1) % 3], vecs[(ax + 2) % 3])
-        # vecs[0] *= -1
-        vecs[1] *= -1
-        vecs[2] *= -1
+        vecs[ax] = orthogonal_dir(vecs[(ax + 1) % 3], vecs[(ax + 2) % 3])
         m = np.stack(vecs + [position], axis=1)
         return m
 
-    # we want to look along the positive z-axis here (we do the camera system transformation later)
-    # zipNeRF uses the negative z-axis -> (p - center) for the lookdir
-    poses = np.stack([viewmatrix((center - p), up, p, lock_up) for p in positions])
+    poses = np.stack([viewmatrix(p - center, up, p, lock_up) for p in positions])
 
     def rotation_about_axis(degrees, axis=0):
         """Creates rotation matrix about one of the coordinate axes."""
@@ -176,7 +209,17 @@ def generate_ellipse_path(
 
     poses = poses @ rotation_about_axis(-render_rotate_yaxis, axis=1)
     poses = poses @ rotation_about_axis(render_rotate_xaxis, axis=0)
-    return torch.from_numpy(poses).float()
+
+    # Add fourth row [0, 0, 0, 1] to make poses 4x4 matrices.
+    poses = np.concatenate([poses, np.tile(np.array([0.0, 0.0, 0.0, 1.0]), (poses.shape[0], 1, 1))], axis=1)
+
+    # Transform back from PCA-aligned space to original space.
+    poses = np.linalg.inv(pca_transform) @ poses
+
+    # Transform back to Colmap camera coordinate system.
+    poses = poses @ np.linalg.inv(colmap2opengl)
+
+    return poses
 
 
 def sample(

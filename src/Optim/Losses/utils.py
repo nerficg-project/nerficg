@@ -1,6 +1,4 @@
-# -- coding: utf-8 --
-
-"""Optim/Lossesutils.py: Utilities for loss implementations."""
+"""Losses/utils.py: Utilities for loss implementations."""
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -16,21 +14,21 @@ class QualityMetricItem:
     name: str
     metric_func: Callable
 
-    _running_sum: list[torch.Tensor, torch.Tensor] = field(init=False)
-    _num_iters: list[int, int] = field(init=False)
+    _running_sum: list[torch.Tensor] = field(init=False)
+    _num_iters: list[int] = field(init=False)
 
     def __post_init__(self):
         self.reset()
+
+    def _call_metric(self, kwargs: Any) -> torch.Tensor:
+        return self.metric_func(**kwargs)
 
     def reset(self) -> None:
         self._running_sum = [torch.tensor(0.0, requires_grad=False), torch.tensor(0.0, requires_grad=False)]
         self._num_iters = [0, 0]
 
-    def getAverage(self):
-        return [(self._running_sum[i].item() / float(self._num_iters[i])) if self._num_iters[i] > 0 else 0.0 for i in range(2)]
-
-    def _call_metric(self, kwargs: Any) -> torch.Tensor:
-        return self.metric_func(**kwargs)
+    def get_average(self):
+        return [self._running_sum[i].item() / self._num_iters[i] if self._num_iters[i] > 0 else 0.0 for i in range(2)]
 
     def apply(self, train: bool, accumulate: bool, kwargs: Any) -> torch.Tensor:
         loss_val = self._call_metric(kwargs)

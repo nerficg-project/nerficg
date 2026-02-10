@@ -1,0 +1,42 @@
+name: nerficg
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - colmap
+  - pip:
+    - --index-url https://download.pytorch.org/whl/cu128
+    - --extra-index-url https://pypi.python.org/simple
+    - torch==2.8.0
+    - torchvision
+    - numpy
+    - tqdm
+    - natsort
+    - pyyaml
+    - munch
+    - tabulate
+    - wandb
+    - opencv-python
+    - kornia
+    - torchmetrics
+    - lpips
+    - einops
+    - setuptools==80.10.2
+    - plyfile
+    - matplotlib
+    - timm
+    - plotly
+    - pillow
+    - jax
+    - pyproj
+    - scikit-learn
+    - pycolmap
+    # gui
+    - cuda-python==12.8.*
+    - PySDL3
+    - numpy-quaternion
+    - platformdirs
+    - imgui-bundle
+    - pyopengl

@@ -1,0 +1,38 @@
+name: nerficg
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - --index-url https://download.pytorch.org/whl/cu118
+    - --extra-index-url https://pypi.python.org/simple
+    - torch==2.7.1
+    - torchvision
+    - numpy
+    - tqdm
+    - natsort
+    - pyyaml
+    - munch
+    - tabulate
+    - wandb
+    - opencv-python
+    - kornia
+    - torchmetrics
+    - lpips
+    - einops
+    - setuptools==80.10.2
+    - plyfile
+    - matplotlib
+    - timm
+    - plotly
+    - pillow
+    - jax
+    - pyproj
+    - scikit-learn
+    - pycolmap
+    # gui
+    - cuda-python==11.8.*
+    - PySDL3
+    - numpy-quaternion
+    - platformdirs
+    - imgui-bundle
+    - pyopengl

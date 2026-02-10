@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Thirdparty/TorchScatter.py: Torch Scatter lib.
 """

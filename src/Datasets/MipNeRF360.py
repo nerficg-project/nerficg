@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Datasets/MipNeRF360.py: Provides a dataset class for scenes from the Mip-NeRF 360 dataset.
 Data available at https://storage.googleapis.com/gresearch/refraw360/360_v2.zip (last accessed 2024-02-01) and
@@ -7,128 +5,120 @@ https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip (last ac
 Will also work for any other scene in the same format as the Mip-NeRF 360 dataset.
 """
 
-import os
-import torch
+import numpy as np
+import pycolmap
 
 import Framework
 from Logging import Logger
 from Cameras.Perspective import PerspectiveCamera
-from Cameras.utils import CameraProperties
 from Datasets.Base import BaseDataset
-from Datasets.utils import CameraCoordinateSystemsTransformations, loadImagesParallel, WorldCoordinateSystemTransformations
-from Datasets.Colmap import quaternion_to_R, read_points3D_binary, storePly, fetchPly, read_extrinsics_binary, read_intrinsics_binary, transformPosesPCA
+from Datasets.utils import read_image_size, compute_scaled_image_size, View, ImageData, transform_poses_pca, BasicPointCloud
+
 
 @Framework.Configurable.configure(
     PATH='dataset/mipnerf360/garden',
     IMAGE_SCALE_FACTOR=0.25,
-    BACKGROUND_COLOR=[0.0, 0.0, 0.0],
-    NEAR_PLANE=0.01,
-    FAR_PLANE=100.0,
     TEST_STEP=8,
     APPLY_PCA=True,
     APPLY_PCA_RESCALE=True,
-    USE_PRECOMPUTED_DOWNSCALING=True,
+    NEAR_PLANE=0.01,  # mipnerf360 uses 0.2 before APPLY_PCA_RESCALE
+    FAR_PLANE=100.0,  # mipnerf360 uses 1e6 before APPLY_PCA_RESCALE
 )
 class CustomDataset(BaseDataset):
     """Dataset class for MipNeRF360 scenes."""
 
-    def __init__(self, path: str) -> None:
-        super().__init__(
-            path,
-            PerspectiveCamera(0.01, 100.0),  # mipnerf360 itself uses 0.2, 1e6
-            CameraCoordinateSystemsTransformations.LEFT_HAND,
-            WorldCoordinateSystemTransformations.XnZY,
+    def load(self) -> tuple[list[PerspectiveCamera], dict[str, list[View]]]:
+        """Loads the dataset into a dict containing lists of views for training and testing."""
+        # load colmap data
+        reconstruction = pycolmap.Reconstruction(self.dataset_path / 'sparse' / '0')
+        Logger.log_debug(reconstruction.summary())
+
+        # this is a specialized loader, so let's make sure all assumptions are met
+        if len(reconstruction.cameras) != 1:
+            raise Framework.DatasetError(
+                'The MipNeRF360 loader only supports COLMAP calibrations with a single camera.'
+                'Please use the Colmap loader instead.'
+            )
+        else:
+            colmap_camera = reconstruction.camera(1)  # COLMAP camera IDs start at 1
+        if colmap_camera.model != pycolmap.CameraModelId.PINHOLE:
+            raise Framework.DatasetError(
+                f'The MipNeRF360 loader only supports the PINHOLE camera model from COLMAP but found {colmap_camera.model} instead.'
+                f'Please use the Colmap loader instead.'
+            )
+        if colmap_camera.params[2] != colmap_camera.width / 2 or colmap_camera.params[3] != colmap_camera.height / 2:
+            raise Framework.DatasetError(
+                f'The MipNeRF360 loader only supports centered principal points.'
+                f'Please use the Colmap loader instead.'
+            )
+
+        # load image file names
+        images = [image for image in reconstruction.images.values() if image.camera.camera_id == colmap_camera.camera_id]
+        images = sorted(images, key=lambda image: image.name)
+        image_directory_name = 'images'
+        image_scale_factor = self.IMAGE_SCALE_FACTOR
+        # use pre-downscaled images if possible
+        match self.IMAGE_SCALE_FACTOR:
+            case 0.5:
+                image_directory_name += '_2'
+                image_scale_factor = None
+            case 0.25:
+                image_directory_name += '_4'
+                image_scale_factor = None
+            case 0.125:
+                image_directory_name += '_8'
+                image_scale_factor = None
+            case _:
+                pass
+
+        # set up intrinsics
+        width, height = colmap_camera.width, colmap_camera.height
+        focal_x, focal_y, center_x, center_y = colmap_camera.params
+        if self.IMAGE_SCALE_FACTOR is not None:
+            if image_scale_factor is None:  # using pre-downscaled images
+                width, height = read_image_size(self.dataset_path / image_directory_name / images[0].name)
+            else:
+                width, height = compute_scaled_image_size((colmap_camera.width, colmap_camera.height), image_scale_factor)
+            scale_factor_intrinsics_x = width / colmap_camera.width
+            scale_factor_intrinsics_y = height / colmap_camera.height
+            focal_x *= scale_factor_intrinsics_x
+            focal_y *= scale_factor_intrinsics_y
+            center_x *= scale_factor_intrinsics_x
+            center_y *= scale_factor_intrinsics_y
+
+        # setup camera
+        camera = PerspectiveCamera(
+            shared_settings=self._camera_settings, width=width, height=height,
+            focal_x=focal_x, focal_y=focal_y, center_x=center_x, center_y=center_y,
         )
 
-    def load(self) -> dict[str, list[CameraProperties] | None]:
-        """Loads the dataset into a dict containing lists of CameraProperties for training and testing."""
-        # set near and far plane to values from config
-        self.camera.near_plane = self.NEAR_PLANE
-        self.camera.far_plane = self.FAR_PLANE
-
-        # load colmap data
-        cam_extrinsics = read_extrinsics_binary(self.dataset_path / 'sparse' / '0' / 'images.bin')
-        cam_intrinsics = read_intrinsics_binary(self.dataset_path / 'sparse' / '0' / 'cameras.bin')
-
-        # create camera properties
-        data: list[CameraProperties] = []
-        for cam_idx, cam_data in enumerate(cam_intrinsics.values()):
-            # load images
-            images = [data for data in cam_extrinsics.values() if data.camera_id == cam_data.id]
-            images = sorted(images, key=lambda data: data.name)
-            image_directory_name = 'images'
-            image_scale_factor = self.IMAGE_SCALE_FACTOR
-            # optionally use pre-downscaled images
-            if self.USE_PRECOMPUTED_DOWNSCALING:
-                match self.IMAGE_SCALE_FACTOR:
-                    case 0.5:
-                        image_directory_name = 'images_2'
-                        image_scale_factor = None
-                    case 0.25:
-                        image_directory_name = 'images_4'
-                        image_scale_factor = None
-                    case 0.125:
-                        image_directory_name = 'images_8'
-                        image_scale_factor = None
-                    case _:
-                        pass
-            image_filenames = [str(self.dataset_path / image_directory_name / image.name) for image in images]
-            rgbs, _ = loadImagesParallel(image_filenames, image_scale_factor, num_threads=4, desc=f'camera {cam_data.id}')
-            for idx, (image, rgb) in enumerate(zip(images, rgbs)):
-                # extract w2c matrix
-                rotation_matrix = torch.from_numpy(quaternion_to_R(image.qvec)).float()
-                translation_vector = torch.from_numpy(image.tvec).float()
-                w2c = torch.eye(4, device=torch.device('cpu'))
-                w2c[:3, :3] = rotation_matrix
-                w2c[:3, 3] = translation_vector
-                # intrinsics
-                focal_x = cam_data.params[0]
-                focal_y = cam_data.params[1]
-                principal_offset_x = cam_data.params[2] - cam_data.width / 2
-                principal_offset_y = cam_data.params[3] - cam_data.height / 2
-                if self.IMAGE_SCALE_FACTOR is not None:
-                    scale_factor_intrinsics_x = rgb.shape[2] / cam_data.width
-                    scale_factor_intrinsics_y = rgb.shape[1] / cam_data.height
-                    focal_x *= scale_factor_intrinsics_x
-                    focal_y *= scale_factor_intrinsics_y
-                    principal_offset_x *= scale_factor_intrinsics_x
-                    principal_offset_y *= scale_factor_intrinsics_y
-                # create and append camera properties object
-                camera_properties = CameraProperties(
-                    width=rgb.shape[2],
-                    height=rgb.shape[1],
-                    rgb=rgb,
-                    focal_x=focal_x,
-                    focal_y=focal_y,
-                    principal_offset_x=principal_offset_x,
-                    principal_offset_y=principal_offset_y,
-                    timestamp=idx / (len(images) - 1),  # TODO: rename this to id
-                )
-                camera_properties.w2c = w2c
-                data.append(camera_properties)
+        # load dataset items
+        data: list[View] = []
+        for idx, image in Logger.log_progress(enumerate(images), desc='loading views', leave=False, total=len(images)):
+            data.append(View(
+                camera=camera,
+                camera_index=0,
+                frame_idx=idx,
+                global_frame_idx=idx,
+                c2w=image.cam_from_world().inverse().matrix(),
+                rgb=ImageData(
+                    self.dataset_path / image_directory_name / image.name, n_channels=3, scale_factor=image_scale_factor
+                ),
+            ))
 
         # load point cloud
-        ply_path = self.dataset_path / 'sparse' / '0' / 'points3D.ply'
-        if not os.path.exists(ply_path):
-            Logger.logInfo('Found new scene. Converting sparse SfM points to .ply format.')
-            xyz, rgb, _ = read_points3D_binary(self.dataset_path / 'sparse' / '0' / 'points3D.bin')
-            storePly(ply_path, xyz, rgb)
-        try:
-            self.point_cloud = fetchPly(ply_path)
-        except Exception:
-            raise Framework.DatasetError(f'Failed to load SfM point cloud')
+        self.point_cloud = BasicPointCloud.from_colmap(reconstruction)
 
-        # rotate/scale poses to align ground with xy plane and optionally fit to [-1, 1]^3 cube
+        # rotate/scale poses to align ground with xz plane and optionally fit to [-1, 1]^3 cube
         if self.APPLY_PCA:
-            c2ws = torch.stack([camera.c2w for camera in data])
-            c2ws, transformation = transformPosesPCA(c2ws, rescale=self.APPLY_PCA_RESCALE)
-            for camera_properties, c2w in zip(data, c2ws):
-                camera_properties.c2w = c2w
+            c2ws = np.stack([view.c2w_numpy for view in data])
+            c2ws, transformation = transform_poses_pca(c2ws, rescale=self.APPLY_PCA_RESCALE)
+            for view, c2w in zip(data, c2ws):
+                view.c2w = c2w
             self.point_cloud.transform(transformation)
-            self.world_coordinate_system = None
 
         # create splits
-        dataset: dict[str, list[CameraProperties]] = {subset: [] for subset in self.subsets}
+        dataset: dict[str, list[View]] = {subset: [] for subset in self.subsets}
         if self.TEST_STEP > 0:
             for i in range(len(data)):
                 if i % self.TEST_STEP == 0:
@@ -139,4 +129,4 @@ class CustomDataset(BaseDataset):
             dataset['train'] = data
 
         # return the dataset
-        return dataset
+        return [camera], dataset

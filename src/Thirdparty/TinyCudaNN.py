@@ -1,5 +1,3 @@
-# -- coding: utf-8 --
-
 """
 Thirdparty/TinyCudaNN.py: Fast fused MLP and input encoding from NVLabs (https://github.com/NVlabs/tiny-cuda-nn).
 """
@@ -10,6 +8,7 @@ __extension_name__ = 'tinycudann'
 __install_command__ = [
     'pip', 'install',
     'git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch',
+    '--no-build-isolation',
 ]
 
 try:

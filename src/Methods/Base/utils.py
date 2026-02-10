@@ -1,17 +1,12 @@
-# -- coding: utf-8 --
-
 """Base/utils.py: Contains utility functions used for the implementation of the available NeRF methods."""
 
 import time
-import git
 from contextlib import AbstractContextManager, nullcontext
 from typing import Callable
-from pathlib import Path
 
 import torch
 
 import Framework
-from Logging import Logger
 
 
 class CallbackTimer(AbstractContextManager):
@@ -21,7 +16,7 @@ class CallbackTimer(AbstractContextManager):
         self.duration: float = 0
         self.num_calls: int = 0
 
-    def getValues(self) -> tuple[float, float, int]:
+    def get_values(self) -> tuple[float, float, int]:
         """Returns absolute time, average time per call, and number of total calls of the callback."""
         return self.duration, self.duration / self.num_calls if self.num_calls > 0 else self.duration, self.num_calls
 
@@ -38,9 +33,13 @@ class CallbackTimer(AbstractContextManager):
         self.num_calls += 1
 
 
-def callbackDecoratorFactory(callback_type: int = 0, active: bool = True, priority: int = 50,
-                             start_iteration: (int | str | None) = None, end_iteration: (int | str | None) = None,
-                             iteration_stride: (int | str | None) = None) -> Callable:
+def callback_decorator_factory(
+    callback_type: int = 0, active: bool = True,
+    priority: int = 50,
+    start_iteration: (int | str | None) = None,
+    end_iteration: (int | str | None) = None,
+    iteration_stride: (int | str | None) = None
+) -> Callable:
     """
     Decorator registering class members as training Callbacks. If argument is of type string, the value will be copied from the corresponding config variable.
     Arguments:
@@ -66,31 +65,28 @@ def callbackDecoratorFactory(callback_type: int = 0, active: bool = True, priori
     return decorator
 
 
-def trainingCallback(active: bool | str = True, priority: int = 50, start_iteration: (int | str | None) = None,
-                     end_iteration: (int | str | None) = None, iteration_stride: (int | str | None) = None) -> Callable:
+def training_callback(
+    active: bool | str = True,
+    priority: int = 50,
+    start_iteration: (int | str | None) = None,
+    end_iteration: (int | str | None) = None,
+    iteration_stride: (int | str | None) = None
+) -> Callable:
     """Training callback decorator."""
-    return callbackDecoratorFactory(0, active, priority, start_iteration, end_iteration, iteration_stride)
+    return callback_decorator_factory(0, active, priority, start_iteration, end_iteration, iteration_stride)
 
 
-def preTrainingCallback(active: bool | str = True, priority: int = 50) -> Callable:
+def pre_training_callback(
+    active: bool | str = True,
+    priority: int = 50
+) -> Callable:
     """Pre-training callback decorator."""
-    return callbackDecoratorFactory(-1, active, priority)
+    return callback_decorator_factory(-1, active, priority)
 
 
-def postTrainingCallback(active: bool | str = True, priority: int = 50) -> Callable:
+def post_training_callback(
+    active: bool | str = True,
+    priority: int = 50
+) -> Callable:
     """Post-training callback decorator."""
-    return callbackDecoratorFactory(1, active, priority)
-
-
-def getGitCommit() -> str | None:
-    """Writes current git commit to model"""
-    Logger.logInfo('Checking git status')
-    parent_path = Path(__file__).resolve().parents[3]
-    try:
-        repo = git.Repo(parent_path)
-        if repo.is_dirty(untracked_files=True):
-            Logger.logWarning('Detected uncommitted changes in your git repository. Using the latest commit as reference.')
-        return f'{repo.active_branch}:{repo.head.commit.hexsha}'
-    except git.InvalidGitRepositoryError:
-        Logger.logInfo(f'Could not find git repository at "{parent_path}"')
-    return None
+    return callback_decorator_factory(1, active, priority)

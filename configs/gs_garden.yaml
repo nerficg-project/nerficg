@@ -2,7 +2,7 @@ GLOBAL:
     LOG_LEVEL: 2
     GPU_INDICES:
     - 0
-    RANDOM_SEED: 1618033989
+    RANDOM_SEED: 0
     ANOMALY_DETECTION: false
     FILTER_WARNINGS: true
     METHOD_TYPE: GaussianSplatting
@@ -22,16 +22,26 @@ TRAINING:
     LOAD_CHECKPOINT: null
     MODEL_NAME: 3dgs_garden
     NUM_ITERATIONS: 30_000
-    ACTIVATE_TIMING: false
     RUN_VALIDATION: false
+    DATA:
+        PRELOADING_LEVEL: 2
+        FIELDS: ['rgb', 'alpha']
+        PRECOMPUTE_RAYS: false
+        RAYS_TO_DEVICE: false
     BACKUP:
         FINAL_CHECKPOINT: true
         RENDER_TESTSET: true
         RENDER_TRAINSET: false
         RENDER_VALSET: false
+        INTERMEDIATE_RENDERINGS: true
         VISUALIZE_ERRORS: false
         INTERVAL: -1
         TRAINING_STATE: false
+    TIMING:
+        ACTIVATE: false
+        INCLUDE_DATALOADING_IN_TOTAL: true
+        INCLUDE_PRETRAINING_IN_TOTAL: true
+        INCLUDE_POSTTRAINING_IN_TOTAL: false
     WANDB:
         ACTIVATE: false
         ENTITY: null
@@ -44,6 +54,8 @@ TRAINING:
             ACTIVE: false
             START_ITERATION: 999
             ITERATION_STRIDE: 1000
+            NUM_IMAGES: -1
+    WRITE_VRAM_STATS: false
     GUI:
         ACTIVATE: true
         RENDER_INTERVAL: 5
@@ -53,10 +65,9 @@ TRAINING:
         FPS_ROLLING_AVERAGE_SIZE: 100
     LEARNING_RATE_POSITION_INIT: 0.00016
     LEARNING_RATE_POSITION_FINAL: 1.6e-06
-    LEARNING_RATE_POSITION_DELAY_MULT: 0.01
     LEARNING_RATE_POSITION_MAX_STEPS: 30_000
     LEARNING_RATE_FEATURE: 0.0025
-    LEARNING_RATE_OPACITY: 0.05
+    LEARNING_RATE_OPACITY: 0.025  # the 3dgs authors used 0.05 for the results in the paper
     LEARNING_RATE_SCALING: 0.005
     LEARNING_RATE_ROTATION: 0.001
     PERCENT_DENSE: 0.01
@@ -73,15 +84,12 @@ DATASET:
     IMAGE_SCALE_FACTOR: 0.25
     NORMALIZE_CUBE: null
     NORMALIZE_RECENTER: false
-    PRECOMPUTE_RAYS: false
-    TO_DEVICE: true
     BACKGROUND_COLOR:
     - 0.0
     - 0.0
     - 0.0
-    NEAR_PLANE: 0.2
-    FAR_PLANE: 100.0
+    NEAR_PLANE: 0.01  # only used to construct the projection matrix as it is hardcoded in the rasterizer
+    FAR_PLANE: 100.0  # only used to construct the projection matrix as it is hardcoded in the rasterizer
     TEST_STEP: 8
     APPLY_PCA: true
     APPLY_PCA_RESCALE: false
-    USE_PRECOMPUTED_DOWNSCALING: true
