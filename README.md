@@ -133,14 +133,13 @@ __Q:__ What coordinate system do the framework and GUI use internally?
 __A:__ Framework and GUI use the same right-handed coordinate system for world and camera space in all calculations.
 The convention is the same as in, e.g., COLMAP, meaning x is right, y is down, and z is forward.
 
-<!-- use the following template for new questions (remove comment once second question is added)
 ##
-__Q:__
+__Q:__ Can I use the modules in the `src/CudaUtils` directory outside of the NeRFICG framework?
 
-__A:__
-
--->
-
+__A:__ Yes! For example, to install the `MortonEncoding` module via pip, simply run
+```shell
+pip install git+https://github.com/nerficg-project/nerficg/#subdirectory=src/CudaUtils/MortonEncoding --no-build-isolation
+```
 
 ## Acknowledgments
 

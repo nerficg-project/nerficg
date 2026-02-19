@@ -11,7 +11,7 @@ __install_command__ = [
 ]
 
 try:
-    from .morton_encoding import morton_encode
+    from .MortonEncoding.morton_encoding import morton_encode
     __all__ = ['morton_encode']
 except ImportError:
     raise Framework.ExtensionError(name=__extension_name__, install_command=__install_command__)

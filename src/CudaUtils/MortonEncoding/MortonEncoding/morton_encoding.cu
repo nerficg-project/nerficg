@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
 
 /*
 Implementation based on
@@ -22,16 +23,20 @@ __device__ __forceinline__ uint64_t splitBy3(uint32_t a) {
 }
 
 __global__ void morton_encode_cu(
-    const float3* positions,
-    int64_t* morton_encoding,
+    const float3* __restrict__ positions,
+    const float3* __restrict__ minimum_coordinates,
+    const float*  __restrict__ cube_size,
+    int64_t* __restrict__ morton_encoding,
     const uint32_t n_positions)
 {
     const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_positions) return;
     const float3 position = positions[idx];
-    const float normalized_x = __saturatef((position.x - d_minimum_coordinates.x) / d_cube_size);
-    const float normalized_y = __saturatef((position.y - d_minimum_coordinates.y) / d_cube_size);
-    const float normalized_z = __saturatef((position.z - d_minimum_coordinates.z) / d_cube_size);
+    const float3 min = minimum_coordinates[0];
+    const float cube_size_rcp = 1.0f / cube_size[0];
+    const float normalized_x = __saturatef((position.x - min.x) * cube_size_rcp);
+    const float normalized_y = __saturatef((position.y - min.y) * cube_size_rcp);
+    const float normalized_z = __saturatef((position.z - min.z) * cube_size_rcp);
     constexpr float factor = 2097151.0f; // 2^21 - 1
     const uint32_t x = static_cast<uint32_t>(normalized_x * factor);
     const uint32_t y = static_cast<uint32_t>(normalized_y * factor);
@@ -40,22 +45,27 @@ __global__ void morton_encode_cu(
     morton_encoding[idx] = static_cast<int64_t>(morton_code); // most significant bit is zero by construction
 }
 
+torch::Tensor morton_encode(const torch::Tensor& positions) {
+    TORCH_CHECK(positions.is_cuda(), "positions must be a CUDA tensor");
+    TORCH_CHECK(positions.dtype() == torch::kFloat32, "positions must be float32");
+    TORCH_CHECK(positions.is_contiguous(), "positions must be contiguous");
+    TORCH_CHECK(positions.dim() == 2 && positions.size(1) == 3, "positions must have shape (N, 3)");
 
-at::Tensor morton_encode(
-    const at::Tensor& positions,
-    const at::Tensor& minimum_coordinates,
-    const at::Tensor& cube_size)
-{
-    cudaMemcpyToSymbol(d_cube_size, cube_size.contiguous().data_ptr<float>(), sizeof(float));
-    cudaMemcpyToSymbol(d_minimum_coordinates, minimum_coordinates.contiguous().data_ptr<float>(), sizeof(float3));
+    auto minmax = positions.aminmax(0);
+    auto& minimum_coordinates = std::get<0>(minmax);
+    auto& maximum_coordinates = std::get<1>(minmax);
+    auto cube_size = (maximum_coordinates - minimum_coordinates).amax();
 
     const uint32_t n_positions = positions.size(0);
-    at::Tensor morton_encoding = torch::empty({n_positions}, positions.options().dtype(torch::kLong));
+    auto morton_encoding = torch::empty({n_positions}, positions.options().dtype(torch::kLong));
 
     constexpr uint32_t block_size = 256;
     const uint32_t grid_size = (n_positions + block_size - 1) / block_size;
-    morton_encode_cu<<<grid_size, block_size>>>(
+    auto stream = at::cuda::getCurrentCUDAStream();
+    morton_encode_cu<<<grid_size, block_size, 0, stream>>>(
         reinterpret_cast<const float3*>(positions.data_ptr<float>()),
+        reinterpret_cast<const float3*>(minimum_coordinates.data_ptr<float>()),
+        cube_size.data_ptr<float>(),
         morton_encoding.data_ptr<int64_t>(),
         n_positions
     );
@@ -65,5 +75,5 @@ at::Tensor morton_encode(
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("morton_encode_cuda", &morton_encode);
+    m.def("morton_encode", &morton_encode);
 }
