@@ -11,8 +11,8 @@ from Cameras.Perspective import PerspectiveCamera
 from Cameras.utils import RadialTangentialDistortion
 from Datasets.Base import BaseDataset
 from Datasets.utils import compute_scaled_image_size, View, ImageData, transform_poses_pca, BasicPointCloud, \
-    load_inverted_segmentation_mask, load_disparity, apply_image_scale_factor, load_optical_flow, \
-    apply_image_scale_factor_optical_flow, estimate_near_far
+    load_inverted_segmentation_mask, load_external_binary_mask, load_disparity, apply_image_scale_factor, \
+    load_optical_flow, apply_image_scale_factor_optical_flow, estimate_near_far, resolve_external_mask_path
 from Logging import Logger
 
 
@@ -23,6 +23,7 @@ from Logging import Logger
     SFM_POINTS_FILTER_RATIO=1.0,  # 0.95 works well in practice
     AABB_TOLERANCE_FACTOR=0.05,  # framework default is 0.1
     ESTIMATE_NEAR_FAR_FROM_SFM_POINTS=False,  # works well with methods that rely on tight near and far bounds
+    EXTERNAL_MASKS_PATH=None,  # directory of per-image binary masks (0 ignore / 255 keep), matched to RGB filenames
 )
 class CustomDataset(BaseDataset):
     """Dataset class for scenes in COLMAP format."""
@@ -36,7 +37,13 @@ class CustomDataset(BaseDataset):
         reconstruction = pycolmap.Reconstruction(self.dataset_path / 'sparse' / '0')
         Logger.log_debug(reconstruction.summary())
 
-        has_segmentation = Path(self.dataset_path / 'sfm_masks').exists()
+        images_root = self.dataset_path / 'images'
+        external_masks_root = None
+        if self.EXTERNAL_MASKS_PATH not in (None, ''):
+            external_masks_root = Path(self.EXTERNAL_MASKS_PATH).expanduser()
+            if not external_masks_root.is_dir():
+                raise Framework.DatasetError(f'invalid EXTERNAL_MASKS_PATH: "{external_masks_root}"')
+        has_sfm_masks = Path(self.dataset_path / 'sfm_masks').exists()
         has_flow = Path(self.dataset_path / 'flow').exists()
         has_disp = Path(self.dataset_path / 'monoc_depth').exists()
 
@@ -103,6 +110,27 @@ class CustomDataset(BaseDataset):
             last_view_idx = n_views - 1
             idx2timestamp = 1 / last_view_idx
             for frame_idx, image in enumerate(images):
+                rgb_path = images_root / image.name
+                if external_masks_root is not None:
+                    mask_path = resolve_external_mask_path(external_masks_root, rgb_path, images_root)
+                    if mask_path is None:
+                        raise Framework.DatasetError(
+                            f'no external mask found for image "{rgb_path}" in "{external_masks_root}"'
+                        )
+                    segmentation = ImageData(
+                        mask_path,
+                        n_channels=1, scale_factor=self.IMAGE_SCALE_FACTOR,
+                        load_fn=load_external_binary_mask,
+                        resize_fn=partial(apply_image_scale_factor, mode='nearest'),
+                    )
+                elif has_sfm_masks:
+                    segmentation = ImageData(
+                        self.dataset_path / 'sfm_masks' / f'{image.name}.png',
+                        n_channels=1, scale_factor=self.IMAGE_SCALE_FACTOR,
+                        load_fn=load_inverted_segmentation_mask,
+                    )
+                else:
+                    segmentation = None
                 data.append(View(
                     camera=camera,
                     camera_index=camera_idx,
@@ -110,15 +138,8 @@ class CustomDataset(BaseDataset):
                     global_frame_idx=global_frame_idx,
                     c2w=image.cam_from_world().inverse().matrix(),
                     timestamp=frame_idx * idx2timestamp,  # significant assumption about how images were taken
-                    rgb=ImageData(
-                        self.dataset_path / 'images' / image.name,
-                        n_channels=3, scale_factor=self.IMAGE_SCALE_FACTOR
-                    ),
-                    segmentation=ImageData(
-                        self.dataset_path / 'sfm_masks' / f'{image.name}.png',
-                        n_channels=1, scale_factor=self.IMAGE_SCALE_FACTOR,
-                        load_fn=load_inverted_segmentation_mask
-                    ) if has_segmentation else None,
+                    rgb=ImageData(rgb_path, n_channels=3, scale_factor=self.IMAGE_SCALE_FACTOR),
+                    segmentation=segmentation,
                     forward_flow=ImageData(
                         self.dataset_path / 'flow' / f'{image.name.split(".")[0]}_forward.flo',
                         n_channels=2, scale_factor=self.IMAGE_SCALE_FACTOR,
