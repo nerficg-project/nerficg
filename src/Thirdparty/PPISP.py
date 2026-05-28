@@ -13,5 +13,6 @@ __install_command__ = [
 
 try:
     from ppisp import PPISP, PPISPConfig
+    from ppisp.report import export_ppisp_report
 except ImportError:
     raise Framework.ExtensionError(name=__extension_name__, install_command=__install_command__)
