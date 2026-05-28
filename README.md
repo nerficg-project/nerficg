@@ -31,7 +31,12 @@ A flexible PyTorch framework for simple and efficient implementation of radiance
 	    export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH"
 	    export CUDA_PATH="/usr/local/cuda-12.8/"
 	    ```
-    - Windows: Coming soon ...
+      We recommend gcc as the C++ compiler. Make sure to check the version requirements of your CUDA SDK.
+    - Windows: Make sure the corresponding environment variables are set. This should typically be done automatically
+      by the CUDA installer, but make sure the `CUDA_PATH` and `CUDA_HOME` variables are set and point to the correct 
+      installation directory.
+      We recommend Visual Studio Community 2022 as the C++ compiler. Make sure to install the
+      `Desktop development with C++` workload as well as the recommended MSVC build tools.
 
 - This repository uses submodules, clone using one of the following options:
 	```shell
@@ -55,14 +60,23 @@ A flexible PyTorch framework for simple and efficient implementation of radiance
   For example, if you plan on using our COLMAP script (see [below](#Training-on-Custom-Image-Sequences)), you would want to use an environment file with the `_with_colmap` suffix.
 
 - To install all additional dependencies for a specific method, run:
-	```shell
-	python ./scripts/install.py -m <METHOD_NAME>
-	```
-	or use
-	```shell
-	python ./scripts/install.py -e <PATH_TO_EXTENSION>
-	```
-	to only install a specific extension.
+    ```shell
+    python ./scripts/install.py -m <METHOD_NAME>
+    ```
+    or use
+    ```shell
+    python ./scripts/install.py -e <PATH_TO_EXTENSION>
+    ```
+    to (re-)install a specific extension or one of the third-party modules in `src/Thirdparty/`.
+    - Windows: If the script fails to locate the compiler, run it inside of a 
+      `x64 Native Tools Command Prompt for VS 20XX` and set the `DISTUTILS_USE_SDK` environment variable:
+      ```bat
+      set DISTUTILS_USE_SDK=1
+      ```
+      Also, because of legacy filename limitations in Windows, the installation may fail depending
+      on the location of the repository on your system. If you get errors about filenames, files
+      not being found, or path issues, try moving the repository directory to a shorter path 
+      (e.g. `C:\nerficg`) and try again.
 
 - [optional] To use our training visualizations with [Weights & Biases](https://wandb.ai/site), run the following command and enter your account identifier:
 	```shell
@@ -140,6 +154,22 @@ __A:__ Yes! For example, to install the `MortonEncoding` module via pip, simply 
 ```shell
 pip install git+https://github.com/nerficg-project/nerficg/#subdirectory=src/CudaUtils/MortonEncoding --no-build-isolation
 ```
+
+##
+__Q:__ Commercial use?
+
+__A:__ Our base framework is licensed under the MIT license, which permits commercial use.
+However, some optional extensions and third-party modules use licenses that prohibit commercial use:
+- `src/Optim/knn_utils.py` defaults to using code licensed under the non-commercial
+[Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md).
+We provide a slightly slower but commercially viable and more generic implementation that can be enabled by
+setting `_ALLOW_PROPRIETARY_LICENSED_CODE = False`.
+- The `GaussianSplatting` method requires the
+[`diff-gaussian-rasterization`](https://github.com/graphdeco-inria/diff-gaussian-rasterization) module, which is
+licenced under the non-commercial [Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md).
+We recommend the NeRFICG-based [Faster-GS]([https://github.com/nerficg-project/faster-gaussian-splatting) implementation
+as a commercially viable alternative.
+
 
 ## Acknowledgments
 

@@ -163,7 +163,7 @@ try:
             gt_idx = self._shared_state.gt_index
             gt_split = self._shared_state.gt_split
             if gt_idx < 0 or not isinstance(self._gui_view.camera, PerspectiveCamera):
-                self._fps.enable()
+                self._fps.enable_cuda()
                 self._fps.start_timer()
                 output = {
                     **self.renderer.render_image(self._gui_view),
@@ -172,7 +172,8 @@ try:
                 }
                 self._fps.update()
             else:
-                self._fps.disable()  # Disable FPS calculation when showing GT
+                self._fps.disable_cuda()
+                self._fps.start_timer()
                 if self._gt_image_cache['idx'] != gt_idx or self._gt_image_cache['split'] != gt_split:
                     previous_mode = dataset.mode
                     self._gt_image_cache['result'] = transform_gt_image(dataset.set_mode(gt_split), gt_idx,
@@ -181,6 +182,7 @@ try:
                     self._gt_image_cache['split'] = gt_split
                     dataset.set_mode(previous_mode)
                 output = {**self._gt_image_cache['result'], 'type': 'gt'}
+                self._fps.update()
 
             # Send frame
             self._shared_state.frame = {
