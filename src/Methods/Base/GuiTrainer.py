@@ -228,8 +228,6 @@ try:
             self._gui_config.checkpoint_path = self.checkpoint_directory / 'final.pt'
             self._gui_config.save_to_disk()
 
-except KeyboardInterrupt as e:
-# except ImportError as e:
-    Logger.log_error('GUI support not available. Please initialize and update submodules to enable GUI support.')
-    Logger.log_error(e)
+except ImportError as e:
+    Logger.log_warning(f'GUI support not available {e}. Falling back to BaseTrainer.')
     GuiTrainer = BaseTrainer
