@@ -189,6 +189,50 @@ def apply_background_color(raw_rgb: torch.Tensor, alpha: torch.Tensor, backgroun
     return torch.lerp(background_color.to(raw_rgb.device), raw_rgb, alpha).clamp(0, 1)
 
 
+def load_external_binary_mask(path: Path) -> torch.Tensor:
+    """Loads a mask image as a binary tensor (0: ignore, 1: keep)."""
+    mask = load_image_simple(path)
+    if mask.shape[0] > 1:
+        mask = mask[:1]
+    return (mask > 0.5).float()
+
+
+def resolve_external_mask_path(mask_root: Path, rgb_path: Path, images_root: Path) -> Path | None:
+    """Returns a mask file path matching the RGB image name, or None if not found."""
+    image_name = rgb_path.name
+    stem = rgb_path.stem
+    try:
+        relative_path = rgb_path.relative_to(images_root)
+    except ValueError:
+        relative_path = Path(image_name)
+    relative_stem = relative_path.with_suffix('')
+    candidates = [
+        mask_root / relative_path,
+        mask_root / f'{relative_stem}.jpg',
+        mask_root / f'{relative_stem}.jpeg',
+        mask_root / f'{relative_stem}.png',
+        mask_root / image_name,
+        mask_root / f'{stem}.jpg',
+        mask_root / f'{stem}.jpeg',
+        mask_root / f'{stem}.png',
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def get_supervision_alpha(view: 'View') -> torch.Tensor | None:
+    """Returns alpha used for GT compositing: view alpha, segmentation mask, or both multiplied."""
+    alpha = view.alpha
+    segmentation = view.segmentation
+    if alpha is None:
+        return segmentation
+    if segmentation is None:
+        return alpha
+    return alpha * segmentation
+
+
 def get_average_pose(poses: np.ndarray) -> np.ndarray:
     """Computes the "average" pose of the inputs."""
     mean_translation = poses[:, :3, 3].mean(axis=0)
