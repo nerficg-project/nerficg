@@ -28,6 +28,14 @@ class BaseLoss(torch.nn.Module):
             weight=weight
         ))
 
+    def update_loss_weight(self, name: str, weight: float) -> None:
+        """Updates the weight of an existing loss metric by name (e.g. for annealed schedules)."""
+        for item in self.loss_metrics:
+            if item.name == name:
+                item.weight = weight
+                return
+        raise Framework.LossError(f'no loss metric named "{name}"')
+
     def add_quality_metric(self, name: str, metric: Callable) -> None:
         self.quality_metrics.append(QualityMetricItem(
             name=name,
