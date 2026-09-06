@@ -90,6 +90,7 @@ try:
             self._shared_state.configurable_advertisements = config_options
 
         @post_training_callback(priority=0, active='GUI.ACTIVATE')
+        @Framework.handle_keyboard_interrupt(verbose=True)
         def _gui_post_training_loop(self, _, dataset: BaseDataset):
             """Terminates the GUI process."""
             self._shared_state.is_training = False

@@ -357,6 +357,20 @@ def catch(cleanup: Callable[[], None] | Callable[[Any], None] | None = None, *,
     return catch_decorator
 
 
+def handle_keyboard_interrupt(verbose: bool = False) -> Callable[[Callable[Param, None]], Callable[Param, None]]:
+
+    def catch_decorator(function: Callable[Param, None]) -> Callable[Param, None]:
+        @wraps(function)
+        def wrapper(*args: Param.args, **kwargs: Param.kwargs) -> None:
+            try:
+                function(*args, **kwargs)
+            except KeyboardInterrupt:
+                if verbose:
+                    Logger.log_info('shutdown requested')
+        return wrapper
+    return catch_decorator
+
+
 # custom exceptions
 class FrameworkError(Exception):
     """A generic exception class for errors that occur within this framework."""
