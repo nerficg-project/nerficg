@@ -18,7 +18,7 @@ def replace_param_group_data(optimizer: torch.optim.Optimizer, new_values: torch
                         state[val].zero_()
 
 
-def prune_param_groups(optimizer: torch.optim.Optimizer, mask: torch.Tensor, group_names: list[str] | None = None) -> dict[str, torch.Tensor]:
+def prune_param_groups(optimizer: torch.optim.Optimizer, mask: torch.Tensor, group_names: list[str] | None = None) -> dict[str, torch.nn.Parameter]:
     """Removes parameter entries based on the given mask."""
     new_params = {}
     for group in optimizer.param_groups:
@@ -38,7 +38,7 @@ def prune_param_groups(optimizer: torch.optim.Optimizer, mask: torch.Tensor, gro
     return new_params
 
 
-def extend_param_groups(optimizer: torch.optim.Optimizer, additional_params: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def extend_param_groups(optimizer: torch.optim.Optimizer, additional_params: dict[str, torch.Tensor]) -> dict[str, torch.nn.Parameter]:
     """Extend existing parameters by concatenating the given tensors."""
     new_params = {}
     for group in optimizer.param_groups:
@@ -76,7 +76,7 @@ def reset_state(optimizer: torch.optim.Optimizer, group_names: list[str] | None 
                     state[val].zero_()
 
 
-def sort_param_groups(optimizer: torch.optim.Optimizer, ordering: torch.Tensor, group_names: list[str] | None = None) -> dict[str, torch.Tensor]:
+def sort_param_groups(optimizer: torch.optim.Optimizer, ordering: torch.Tensor, group_names: list[str] | None = None) -> dict[str, torch.nn.Parameter]:
     """Sorts parameter entries based on the given ordering."""
     new_params = {}
     for group in optimizer.param_groups:

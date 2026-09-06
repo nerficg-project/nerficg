@@ -7,7 +7,7 @@ __email__ = 'hahlbohm@cg.cs.tu-bs.de'
 __status__ = 'Development'
 
 development_versions: dict[str, str] = {
-    'python': '3.11.14',
+    'python': '3.11.15',
     'pytorch': '2.8.0',
     'cuda': '12.8',
     'cudnn': '91002'
@@ -323,6 +323,7 @@ def teardown():
 # decorators
 Param = ParamSpec("Param")
 RetType = TypeVar("RetType")
+
 
 def catch(cleanup: Callable[[], None] | Callable[[Any], None] | None = None, *,
           is_method: bool = False) -> Callable[[Callable[Param, RetType]], Callable[Param, RetType]]:

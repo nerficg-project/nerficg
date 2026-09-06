@@ -229,5 +229,5 @@ try:
             self._gui_config.save_to_disk()
 
 except ImportError as e:
-    Logger.log_warning(f'GUI support not available {e}. Falling back to BaseTrainer.')
+    Logger.log_warning(f'GUI support not available ({e}). Falling back to BaseTrainer.')
     GuiTrainer = BaseTrainer
