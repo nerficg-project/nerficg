@@ -18,7 +18,7 @@ with utils.DiscoverSourcePath():
 
 
 def main(*, base_dir: Path, checkpoint_name: str, subsets: list[str] | None, calculate_metrics: bool,
-         closest_train: bool, visualize_errors: bool, benchmark: bool) -> None:
+         closest_train: bool, visualize_errors: bool, benchmark: bool, reference_set: str | None) -> None:
     # setup framework
     Framework.setup(config_path=str(base_dir / 'training_config.yaml'), require_custom_config=True)
     # load dataset, model, and renderer
@@ -46,7 +46,7 @@ def main(*, base_dir: Path, checkpoint_name: str, subsets: list[str] | None, cal
                     Logger.log_warning(f'Skipping unknown subset or camera trajectory: {subset}.')
                     continue
                 trajectory = CameraTrajectory.get(subset)()
-                trajectory.add_to_dataset(dataset, reference_set='train')
+                trajectory.add_to_dataset(dataset, reference_set=reference_set)
             dataset.set_mode(subset)
             renderer.render_subset(
                 output_directory=base_dir / 'inference',
@@ -129,6 +129,13 @@ if __name__ == '__main__':
         help='Visualizes the errors between the rendered and ground truth images, if available.'
     )
     parser.add_argument(
+        '--reference_set', action='store', dest='reference_set', default='train',
+        metavar='subset', required=False,
+        help='Dataset subset the camera trajectories are generated from, or "all" to use every '
+             'subset. Trajectories derive their poses, and for dynamic scenes their timestamps, '
+             'from these views.'
+    )
+    parser.add_argument(
         '--checkpoint', action='store', dest='checkpoint_name', default='final.pt',
         metavar='checkpoint_name', required=False,
         help='The name of the checkpoint file to use for inference.'
@@ -143,4 +150,5 @@ if __name__ == '__main__':
         closest_train=args.closest_train,
         visualize_errors=args.visualize_errors,
         benchmark=args.benchmark,
+        reference_set=None if args.reference_set == 'all' else args.reference_set,
     )
