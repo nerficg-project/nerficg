@@ -1,0 +1,52 @@
+# uv alternative to environments/py311_cu128.yaml; see the README.
+# Switch CUDA flavour by changing the index URL below (e.g. cu118, cu130).
+[project]
+name = "nerficg"
+version = "2.0.0"
+description = "A flexible PyTorch framework for radiance field and view synthesis methods."
+requires-python = "==3.11.*"
+dependencies = [
+    "torch==2.8.0",
+    "torchvision",
+    "numpy",
+    "tqdm",
+    "natsort",
+    "pyyaml",
+    "munch",
+    "tabulate",
+    "wandb",
+    "opencv-python",
+    "kornia",
+    "torchmetrics",
+    "lpips",
+    "einops",
+    "setuptools==80.10.2",
+    "plyfile",
+    "matplotlib",
+    "timm",
+    "plotly",
+    "pillow",
+    "jax",
+    "pyproj",
+    "scikit-learn",
+    "pycolmap",
+    # scripts/install.py shells out to `pip install <extension> --no-build-isolation`,
+    # and a uv virtualenv has no pip of its own.
+    "pip",
+    # gui
+    "cuda-python==12.8.*",
+    "PySDL3",
+    "numpy-quaternion",
+    "platformdirs",
+    "imgui-bundle",
+    "pyopengl",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }

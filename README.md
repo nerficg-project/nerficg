@@ -59,6 +59,17 @@ A flexible PyTorch framework for simple and efficient implementation of radiance
   We provide multiple options in the `environments` directory.
   For example, if you plan on using our COLMAP script (see [below](#Training-on-Custom-Image-Sequences)), you would want to use an environment file with the `_with_colmap` suffix.
 
+- Alternatively, the same dependencies are available as a [uv](https://docs.astral.sh/uv/)
+  project in `pyproject.toml`, which mirrors `environments/py311_cu128.yaml`:
+	```shell
+	uv sync
+	uv run python ./scripts/install.py -m <METHOD_NAME>
+	```
+  Prefix any of the commands below with `uv run` instead of activating an environment.
+  A different CUDA build of PyTorch is a one-line change to the index URL in `pyproject.toml`.
+  If your CUDA SDK or host compiler is not the system one, copy `environments/uv.env.example`
+  to `.env` and add `--env-file .env` to each `uv run`.
+
 - To install all additional dependencies for a specific method, run:
     ```shell
     python ./scripts/install.py -m <METHOD_NAME>
