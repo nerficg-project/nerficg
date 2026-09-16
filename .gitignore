@@ -21,3 +21,6 @@ backup/
 .pytest_cache/
 imgui.ini
 __pycache__/
+.venv/
+.env
+.toolchain/
