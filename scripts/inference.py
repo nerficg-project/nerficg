@@ -35,6 +35,10 @@ def main(*, base_dir: Path, checkpoint_name: str, subsets: list[str] | None, cal
         model=model
     )
     # render subsets
+    if reference_set is not None and reference_set not in dataset.subsets:
+        raise Framework.InferenceError(
+            f'Invalid reference set "{reference_set}"; available options are: {dataset.subsets} or "all".'
+        )
     if subsets:
         if 'all' in subsets:
             subsets = dataset.subsets + CameraTrajectory.list_options()
@@ -131,9 +135,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--reference_set', action='store', dest='reference_set', default='train',
         metavar='subset', required=False,
-        help='Dataset subset the camera trajectories are generated from, or "all" to use every '
-             'subset. Trajectories derive their poses, and for dynamic scenes their timestamps, '
-             'from these views.'
+        help='Dataset subset the camera trajectories take their reference views from, or '
+             '"all" for the train, val and test sets combined. Trajectories derive their poses, '
+             'and for dynamic scenes often their timestamps, from these views.'
     )
     parser.add_argument(
         '--checkpoint', action='store', dest='checkpoint_name', default='final.pt',
