@@ -1,5 +1,8 @@
 # uv alternative to environments/py311_cu128.yaml; see the README.
-# Switch CUDA flavour by changing the index URL below (e.g. cu118, cu130).
+# To target a different CUDA build, change the index URL below and the torch pin to a
+# version that index carries (cu126 and cu129 also ship 2.8.0; cu118 stops at 2.7.1 and
+# cu130 starts at 2.9.0). A different CUDA major also needs the cuda-python pin changed,
+# as environments/py311_cu118.yaml does.
 [project]
 name = "nerficg"
 version = "2.0.0"
@@ -30,8 +33,9 @@ dependencies = [
     "pyproj",
     "scikit-learn",
     "pycolmap",
-    # scripts/install.py shells out to `pip install <extension> --no-build-isolation`,
-    # and a uv virtualenv has no pip of its own.
+    # The extension modules shell out to a bare `pip install <extension>`, and a uv
+    # virtualenv has no pip of its own. `uv run` puts .venv/bin first on PATH, so this is
+    # the pip they find.
     "pip",
     # gui
     "cuda-python==12.8.*",
@@ -41,6 +45,10 @@ dependencies = [
     "imgui-bundle",
     "pyopengl",
 ]
+
+[tool.uv]
+# The framework is used from a source checkout via scripts/, not installed as a package.
+package = false
 
 [[tool.uv.index]]
 name = "pytorch"

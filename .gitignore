@@ -23,5 +23,4 @@ imgui.ini
 __pycache__/
 .venv/
 .env
-uv.lock
 .toolchain/

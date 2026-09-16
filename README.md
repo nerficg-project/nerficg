@@ -66,9 +66,14 @@ A flexible PyTorch framework for simple and efficient implementation of radiance
 	uv run python ./scripts/install.py -m <METHOD_NAME>
 	```
   Prefix any of the commands below with `uv run` instead of activating an environment.
-  A different CUDA build of PyTorch is a one-line change to the index URL in `pyproject.toml`.
+  To target a different CUDA build, change the index URL in `pyproject.toml` together with the
+  `torch` pin, since not every index carries every release.
   If your CUDA SDK or host compiler is not the system one, copy `environments/uv.env.example`
   to `.env` and add `--env-file .env` to each `uv run`.
+
+  Note that once `install.py` has compiled the CUDA extensions into the environment, they are
+  unknown to `pyproject.toml`, and a later plain `uv sync` removes them. Use
+  `uv sync --inexact` from that point on to leave them in place. `uv run` never prunes.
 
 - To install all additional dependencies for a specific method, run:
     ```shell
