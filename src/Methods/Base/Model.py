@@ -87,8 +87,8 @@ class BaseModel(Framework.Configurable, ABC, torch.nn.Module):
                 target = model
                 attr_name = key
                 while '.' in attr_name:
-                    sub_target, attr_name = key.split('.', 1)
-                    target = getattr(model, sub_target)
+                    sub_target, attr_name = attr_name.split('.', 1)
+                    target = getattr(target, sub_target)
                 if attr_name in target._parameters:
                     setattr(target, attr_name, torch.nn.Parameter(checkpoint['model_state_dict'][key]))
                 else:

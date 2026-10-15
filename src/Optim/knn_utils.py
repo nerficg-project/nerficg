@@ -1,4 +1,4 @@
-"""Optim/knn_utils.py: K nearest neighbour utilities."""
+"""Optim/knn_utils.py: K nearest neighbor utilities."""
 
 import warnings
 

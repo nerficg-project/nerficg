@@ -1,4 +1,4 @@
-"""Visual/Trajectories/Stabilized.py: Generates a stabilized path from a set of reference poses by using a sliding window."""
+"""Visual/Trajectories/StabilizedPath.py: Generates a stabilized path from a set of reference poses by using a sliding window."""
 
 import numpy as np
 

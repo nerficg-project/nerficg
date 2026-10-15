@@ -122,9 +122,9 @@ class PerspectiveCamera(BaseCamera):
         """
             Returns the transformation matrix from NDC to screen space.
             if pixel_centers_at_integer_coordinates:
-                [-1, 1]^3 -> [-0.5, width - 0.5] x [-0.5, height - 0.5] x [near_plane, far_plane]
+                [-1, 1]^3 -> [-0.5, width - 0.5] x [-0.5, height - 0.5] x [-1, 1]
             else:
-                [-1, 1]^3 -> [0, width] x [0, height] x [near_plane, far_plane]
+                [-1, 1]^3 -> [0, width] x [0, height] x [-1, 1]
 
             Args:
                 pixel_centers_at_integer_coordinates: If True, pixel centers will be at integer coordinates.

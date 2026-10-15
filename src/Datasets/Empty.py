@@ -20,7 +20,7 @@ class CustomDataset(BaseDataset):
     """Dataset class for methods that want to use the GUI without a dataset."""
 
     def load(self) -> tuple[list[PerspectiveCamera], dict[str, list[View]]]:
-        """Create a single camera properties object inside the test subset."""
+        """Create a single camera properties object inside the train subset."""
         # compute focal length from vertical field of view
         width, height = self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT
         focal = height * fov_to_focal(self.VERTICAL_FOV, degrees=True)
@@ -30,5 +30,13 @@ class CustomDataset(BaseDataset):
         )
         # setup dataset
         dataset: dict[str, list[View]] = {subset: [] for subset in self.subsets}
-        dataset['train'] = [View(camera, 0, 0, 0, np.eye(4))]
+        dataset['train'] = [
+            View(
+                camera=camera,
+                camera_index=0,
+                frame_idx=0,
+                global_frame_idx=0,
+                c2w=np.eye(4),
+            )
+        ]
         return [camera], dataset

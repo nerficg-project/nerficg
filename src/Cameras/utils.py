@@ -159,22 +159,61 @@ def look_at(eye: np.ndarray, lookat: np.ndarray, up: np.ndarray) -> np.ndarray:
     return c2w
 
 
-@dataclass
 class SharedCameraSettings:
     """A container class for virtual camera settings."""
-    background_color: torch.Tensor
-    near_plane: float
-    far_plane: float
 
-    def __post_init__(self):
-        if self.background_color.shape != (3,):
+    def __init__(
+        self,
+        background_color:
+        np.ndarray,
+        near_plane: float,
+        far_plane: float,
+        gaze_position: np.ndarray | None = None
+    ) -> None:
+        if near_plane <= 0 or far_plane <= near_plane:
             raise Framework.CameraError(
-                f'background_color must be a torch tensor of shape (3,), but got {self.background_color.shape}'
+                f'invalid near and far plane values (near_plane={near_plane}, far_plane={far_plane}). Must be: 0 < near_plane < far_plane'
             )
-        if self.near_plane <= 0 or self.far_plane <= self.near_plane:
-            raise Framework.CameraError(
-                f'invalid near and far plane values (near_plane={self.near_plane}, far_plane={self.far_plane}). Must be: 0 < near_plane < far_plane'
-            )
+        self.background_color = background_color
+        self.near_plane = near_plane
+        self.far_plane = far_plane
+        self.gaze_position = gaze_position
+
+    @property
+    def background_color(self) -> torch.Tensor:
+        """Returns the background color on the default device."""
+        if self._background_color_device is None:
+            self._background_color_device = torch.as_tensor(self._background_color, dtype=torch.float32, device=Framework.config.GLOBAL.DEFAULT_DEVICE)
+        return self._background_color_device
+
+    @background_color.setter
+    def background_color(self, color: np.ndarray) -> None:
+        """Sets the background color."""
+        if color.shape != (3,):
+            raise Framework.CameraError(f'background_color must be a np.array of shape (3,), but got {color.shape}')
+        self._background_color = color.astype(np.float32)
+        self._background_color_device = None
+
+    @property
+    def background_color_numpy(self) -> np.ndarray:
+        """Returns the background color."""
+        return self._background_color.copy()
+
+    @property
+    def gaze_position(self) -> np.ndarray | None:
+        """Returns the gaze position in screen space, or None if no gaze is tracked."""
+        return None if self._gaze_position is None else self._gaze_position.copy()
+
+    @gaze_position.setter
+    def gaze_position(self, position: np.ndarray | None) -> None:
+        """Sets the gaze position in screen space."""
+        if position is not None and position.shape != (2,):
+            raise Framework.CameraError(f'gaze_position must be a np.array of shape (2,), but got {position.shape}')
+        self._gaze_position = None if position is None else position.astype(np.float32)
+
+    def __getstate__(self) -> dict:
+        # ensure the device copy is never pickled
+        return self.__dict__ | {'_background_color_device': None}
 
 
 def quaternion_to_rotation_matrix(quaternions: np.ndarray | torch.Tensor, normalize: bool = True) -> np.ndarray | torch.Tensor:

@@ -47,7 +47,7 @@ def callback_decorator_factory(
         active              Used to deactivate callbacks
         priority            Determines order of callback execution (higher priority first).
         start_iteration     Index of first iteration where this callback is called.
-        end_iteration       Last iteration where this callback is called (exclusive).
+        end_iteration       Last iteration where this callback is called (inclusive).
         iteration_stride    Number of iterations between callback calls.
     """
     def decorator(function: Callable) -> Callable:

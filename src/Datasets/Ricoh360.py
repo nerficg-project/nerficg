@@ -53,7 +53,7 @@ class CustomDataset(BaseDataset):
                 if camera is None:
                     camera = EquirectangularCamera(shared_settings=self._camera_settings, width=width, height=height)
                 elif camera.width != width or height != camera.height:
-                    raise Framework.DatasetError('The OmniBlender loader requires all views to have the same image size.')
+                    raise Framework.DatasetError('The Ricoh360 loader requires all views to have the same image size.')
 
                 # load camera extrinsics
                 pose = openmvg_data['extrinsics'][view_info['id_pose']]['value']

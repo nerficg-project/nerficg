@@ -117,8 +117,12 @@ class Directories:
     SRC_DIR: Path = NERFICG_ROOT / 'src'
 
 
+# set hugging face hub cache directory (read on import, so it cannot go into setup_torch)
+os.environ['HF_HUB_CACHE'] = str(Directories.CACHE_DIR / 'huggingface')
+
+
 def setup(require_custom_config: bool = False, config_path: str | None = None) -> list[str] | None:
-    """Performs a complete training setup based on the config file provided via comment line (or default)"""
+    """Performs a complete training setup based on the config file provided via command line (or default)"""
     # set multiprocessing start method
     try:
         set_start_method('spawn')
@@ -400,7 +404,7 @@ class TrainingError(FrameworkError):
 
 
 class InferenceError(FrameworkError):
-    """Raise in case of an exception inference configuration."""
+    """Exception regarding the inference configuration."""
 
 
 class CameraError(FrameworkError):

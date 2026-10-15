@@ -318,12 +318,19 @@ class BasicPointCloud:
         """Returns the number of points in the point cloud."""
         return self.positions.shape[0]
 
-    def to(self, dtype: torch.dtype = None, device: torch.device = None) -> None:
+    def to(self, dtype: torch.dtype | None = None, device: torch.device | None = None) -> None:
         """Moves the point cloud data to the specified device and data type."""
         for member in fields(self):
             val = getattr(self, member.name)
             if isinstance(val, torch.Tensor):
                 setattr(self, member.name, val.to(dtype=dtype, device=device))
+
+    def apply_mask(self, valid_mask: torch.Tensor) -> None:
+        """Removes all points not selected by the given mask from all per-point data."""
+        for member in fields(self):
+            val = getattr(self, member.name)
+            if isinstance(val, torch.Tensor):
+                setattr(self, member.name, val[valid_mask])
 
     def transform(self, transform: torch.Tensor | np.ndarray) -> None:
         """Applies a rigid transformation to the point cloud."""
@@ -347,10 +354,7 @@ class BasicPointCloud:
         mean = self.positions.mean(dim=0, keepdim=True)
         dists = torch.linalg.norm((self.positions - mean), dim=1)
         quantile = torch.quantile(dists, filter_ratio, interpolation='midpoint')
-        valid_mask = dists < quantile
-        self.positions = self.positions[valid_mask]
-        if self.colors is not None:
-            self.colors = self.colors[valid_mask]
+        self.apply_mask(dists < quantile)
 
     def get_aabb(self, tolerance_factor: float = 0.1, filter_outliers_percentage: float | None = None) -> 'AxisAlignedBox':
         """Calculates the axis-aligned bounding box (AABB) of the point cloud."""
@@ -366,8 +370,7 @@ class BasicPointCloud:
         aabb = ((torch.stack([min_position, max_position], dim=0) - center) * (1.0 + tolerance_factor)) + center
         if filter_outliers_percentage is not None:
             valid_mask = (self.positions > aabb[0]) & (self.positions < aabb[1])
-            valid_mask = valid_mask.all(dim=1)
-            self.positions = self.positions[valid_mask]
+            self.apply_mask(valid_mask.all(dim=1))
         return AxisAlignedBox(aabb)
 
     @classmethod
@@ -765,13 +768,14 @@ class ImageData:
 
 class View:
     """Stores information for a view of a scene."""
+
     def __init__(
         self,
         camera: 'BaseCamera',
-        camera_index: int,
-        frame_idx: int,
-        global_frame_idx: int,
         c2w: np.ndarray,
+        camera_index: int,
+        frame_idx: int = -1,
+        global_frame_idx: int = -1,
         timestamp: float = 0.0,
         exif: dict | None = None,
         rgb: ImageData | None = None,

@@ -1,8 +1,8 @@
 """Base/GuiTrainer.py: Basic Trainer with live GUI support."""
 
+import os
 import typing
 from copy import deepcopy
-from pathlib import Path
 
 import torch
 from torch import multiprocessing as mp
@@ -32,6 +32,7 @@ try:
             GUI_STATUS_INTERVAL=20,
             SKIP_GUI_SETUP=False,
             FPS_ROLLING_AVERAGE_SIZE=100,
+            MAX_RENDERS_BETWEEN_GUI_UPDATES=2,
         )
     )
     class GuiTrainer(BaseTrainer):
@@ -83,9 +84,11 @@ try:
             config_options = []
             for key, value in self.renderer.__dict__.items():
                 # Assume configuration options do not start with _ and are fully uppercase
-                if key[0] == '_' or not key.isupper():
-                    continue
-                config_options.append((f'Renderer.{key}', value))
+                if key[0] != '_' and key.isupper():
+                    config_options.append((f'Renderer.{key}', value))
+                # Additional GUI configuration options not present in the .yaml config
+                if key.startswith('_icgui_'):
+                    config_options.append((f'Renderer.{key}', value))
 
             self._shared_state.configurable_advertisements = config_options
 
@@ -138,13 +141,27 @@ try:
             self._gui_set_renderer_overrides()
 
             self.model.eval()
-            # Save one screenshot per frame if requested
-            screenshot_view = self._shared_state.screenshot_view
-            if screenshot_view is not None:
-                view, color_mode, color_map = screenshot_view
-                output = self.renderer.render_image(view)
-                save_screenshot(output, view.timestamp, color_mode, color_map, iteration=iteration)
-                del output
+
+            # Process screenshot and trajectory requests
+            for _ in range(self.GUI.MAX_RENDERS_BETWEEN_GUI_UPDATES):
+                screenshot_view = self._shared_state.screenshot_view
+                if screenshot_view is not None:
+                    view, color_mode, color_map = screenshot_view
+                    output = self.renderer.render_image(view)
+                    save_screenshot(output, view.timestamp, color_mode, color_map, iteration=iteration)
+                    del output
+                    continue
+                trajectory_view = self._shared_state.trajectory_view
+                if trajectory_view is not None:
+                    view, color_mode, color_map, dirname = trajectory_view
+                    output = self.renderer.render_image(view)
+                    save_screenshot(output, view.timestamp, color_mode, color_map, verbose=False,
+                                    iteration=iteration, directory=self.output_directory / dirname,
+                                    name=f'{self._shared_state.trajectory_progress_num_frames:07d}.png')
+                    del output
+                    self._shared_state.trajectory_progress_num_frames += 1
+                    continue
+                break  # No more special renders requested, break out of loop
 
             if self._shared_state.terminate_training:
                 raise KeyboardInterrupt('Training terminated from GUI')
@@ -160,9 +177,7 @@ try:
                     self._gt_image_cache['idx'] = -1  # Camera mode changed, invalidate cache
                 self._gui_view = new_view
 
-            # TODO: Send as one unit to avoid race conditions
-            gt_idx = self._shared_state.gt_index
-            gt_split = self._shared_state.gt_split
+            gt_idx, gt_split = self._shared_state.gt_request
             if gt_idx < 0 or not isinstance(self._gui_view.camera, PerspectiveCamera):
                 self._fps.enable_cuda()
                 self._fps.start_timer()
@@ -230,5 +245,11 @@ try:
             self._gui_config.save_to_disk()
 
 except ImportError as e:
-    Logger.log_warning(f'GUI support not available ({e}). Falling back to BaseTrainer.')
+    Logger.log_warning(f'GUI support not available ({e}), falling back to BaseTrainer.')
+    GuiTrainer = BaseTrainer
+
+except OSError as e:
+    if e.errno == 22 and os.name == 'nt':
+        Logger.log_warning(f'GUI dependencies failed to load, this may be an issue with your network connection or '
+                           f'Windows Defender blocking the SDL3. Falling back to BaseTrainer. ({e})')
     GuiTrainer = BaseTrainer

@@ -44,7 +44,8 @@ class CustomDataset(BaseDataset):
         cameras: list[PerspectiveCamera] = []
         data: list[View] = []
         global_frame_idx = 0
-        for camera_idx, colmap_camera in Logger.log_progress(enumerate(reconstruction.cameras.values()), desc=f'loading camera views', leave=False, total=len(cameras)):
+        colmap_cameras_sorted = sorted([cam for cam in reconstruction.cameras.values()], key=lambda cam: cam.camera_id)
+        for camera_idx, colmap_camera in Logger.log_progress(enumerate(colmap_cameras_sorted), desc=f'loading camera views', leave=False, total=len(cameras)):
             # load intrinsics
             match colmap_camera.model:
                 case pycolmap.CameraModelId.SIMPLE_PINHOLE:

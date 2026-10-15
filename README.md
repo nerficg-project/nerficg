@@ -159,15 +159,21 @@ pip install git+https://github.com/nerficg-project/nerficg/#subdirectory=src/Cud
 __Q:__ Commercial use?
 
 __A:__ Our base framework is licensed under the MIT license, which permits commercial use.
-However, some optional extensions and third-party modules use licenses that prohibit commercial use:
+However, some optional extensions and third-party modules use licenses that prohibit or restrict commercial use:
 - `src/Optim/knn_utils.py` defaults to using code licensed under the non-commercial
 [Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md).
 We provide a slightly slower but commercially viable and more generic implementation that can be enabled by
 setting `_ALLOW_PROPRIETARY_LICENSED_CODE = False`.
+- `src/Optim/segmentation_utils.py` uses [SegFormer](https://github.com/NVlabs/SegFormer/) / 
+[SAM3](https://github.com/facebookresearch/sam3) to compute semantic
+segmentation masks. Their code and pretrained weights are subject to the
+ [NVIDIA Source Code License for SegFormer](https://github.com/NVlabs/SegFormer/blob/master/LICENSE) (non-commercial) and
+[SAM License](https://github.com/facebookresearch/sam3/blob/main/LICENSE). Setting `_ALLOW_NVIDIA_LICENSED_CODE = False` /
+`_ALLOW_SAM_LICENSED_CODE = False` removes the dependency, which disables semantic segmentation with the respective method.
 - The `GaussianSplatting` method requires the
 [`diff-gaussian-rasterization`](https://github.com/graphdeco-inria/diff-gaussian-rasterization) module, which is
-licenced under the non-commercial [Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md).
-We recommend the NeRFICG-based [Faster-GS]([https://github.com/nerficg-project/faster-gaussian-splatting) implementation
+licensed under the non-commercial [Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md).
+We recommend the NeRFICG-based [Faster-GS](https://github.com/nerficg-project/faster-gaussian-splatting) implementation
 as a commercially viable alternative.
 
 

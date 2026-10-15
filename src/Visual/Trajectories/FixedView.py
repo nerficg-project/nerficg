@@ -1,5 +1,5 @@
 """
-Visual/Trajectories/StabilizedView.py: A trajectory for dynamic scenes, replaying time for a single, fixed view.
+Visual/Trajectories/FixedView.py: A trajectory for dynamic scenes, replaying time for a single, fixed view.
 Adapted from DyCheck (iPhone dataset) by Gao et al. 2022 (https://github.com/KAIR-BAIR/dycheck/blob/main).
 """
 

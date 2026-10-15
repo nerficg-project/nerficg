@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 
 import Framework
@@ -24,11 +25,9 @@ class BaseCamera(ABC):
         return self.shared_settings.background_color
 
     @background_color.setter
-    def background_color(self, color: torch.Tensor) -> None:
+    def background_color(self, color: np.ndarray) -> None:
         """Sets the background color of the camera."""
-        if color.shape != self.shared_settings.background_color.shape:
-            raise Framework.CameraError(f'Invalid background color shape: expected {self.shared_settings.background_color.shape}, got {color.shape}')
-        self.shared_settings.background_color = color.to(self.shared_settings.background_color)
+        self.shared_settings.background_color = color
 
     @property
     def near_plane(self) -> float:
@@ -53,6 +52,18 @@ class BaseCamera(ABC):
         if distance <= self.shared_settings.near_plane:
             raise Framework.CameraError(f'Invalid far plane distance: expected far_plane > near_plane ({self.shared_settings.near_plane}), got {distance}')
         self.shared_settings.far_plane = distance
+
+    @property
+    def gaze_position(self) -> np.ndarray:
+        """Returns the gaze position in screen space, falling back to the image center if no gaze is tracked."""
+        if self.shared_settings.gaze_position is None:
+            return np.array([self.width / 2.0, self.height / 2.0], dtype=np.float32)
+        return self.shared_settings.gaze_position
+
+    @gaze_position.setter
+    def gaze_position(self, position: np.ndarray | None) -> None:
+        """Sets the gaze position in screen space. None restores the image center fallback."""
+        self.shared_settings.gaze_position = position
 
     @abstractmethod
     def cam_to_screen(self, xyz_cam: torch.Tensor, z_culling: bool) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

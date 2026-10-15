@@ -38,7 +38,7 @@ class BaseDataset(Framework.Configurable, ABC, Iterable[View]):
         self._bounding_box: AxisAlignedBox | None = None
         self._point_cloud: BasicPointCloud | None = None  # TODO: only load on demand
         self._camera_settings = SharedCameraSettings(
-            background_color=torch.tensor(self.BACKGROUND_COLOR, dtype=torch.float32, device=Framework.config.GLOBAL.DEFAULT_DEVICE),
+            background_color=np.array(self.BACKGROUND_COLOR, dtype=np.float32),
             near_plane=float(self.NEAR_PLANE),
             far_plane=float(self.FAR_PLANE)
         )
@@ -104,7 +104,13 @@ class BaseDataset(Framework.Configurable, ABC, Iterable[View]):
         lookat_point = np.array([0.0, -1.0, 0.0])
         up_axis = np.array([0.0, -1.0, 0.0])
         default_c2w = look_at(cam_position, lookat_point, up_axis)
-        return View(self.default_camera, DEFAULT_CAMERA_INDEX, 0, 0, default_c2w)
+        return View(
+            camera=self.default_camera,
+            camera_index=DEFAULT_CAMERA_INDEX,
+            frame_idx=0,
+            global_frame_idx=0,
+            c2w=default_c2w,
+        )
 
     @property
     def point_cloud(self) -> BasicPointCloud | None:
