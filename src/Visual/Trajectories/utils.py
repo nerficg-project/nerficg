@@ -53,7 +53,13 @@ class CameraTrajectory(ABC):
             return dataset
         if not self._trajectory:
             if reference_set is None:
-                reference_views = [*dataset.data['train'], *dataset.data['val'], *dataset.data['test']]
+                # Sorted by time, since each subset spans the full range: concatenating them
+                # as-is makes a dynamic scene run from start to end once per subset. The frame
+                # index only breaks ties, as a multi-camera rig shares timestamps across views.
+                reference_views = sorted(
+                    [*dataset.data['train'], *dataset.data['val'], *dataset.data['test']],
+                    key=lambda view: (view.timestamp, view.global_frame_idx),
+                )
             else:
                 reference_views = dataset.data[reference_set]
             self.generate(default_camera=dataset.default_camera, reference_views=reference_views)
